@@ -3,7 +3,7 @@
 // same session model — adapted to Next.js route handlers + cookie APIs.
 // Imported ONLY by files under app/api (server-only); never by client code.
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cookies, headers } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
@@ -15,8 +15,28 @@ export const SUPABASE_URL = process.env.SUPABASE_URL as string;
 export const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY as string;
 
 // Service-role client (server only). Never carries session state.
-export const supabase = createClient(SUPABASE_URL ?? "", SUPABASE_KEY ?? "", {
-  auth: { persistSession: false, autoRefreshToken: false },
+// Created lazily on first use so createClient is NOT invoked at module
+// import time — otherwise next build (page-data collection) evaluates the
+// route modules with no env vars set and Supabase throws "supabaseUrl is
+// required." before any handler (or the dbMissing() guard) can run.
+let _supabase: SupabaseClient | null = null;
+function getSupabase(): SupabaseClient {
+  if (!_supabase) {
+    _supabase = createClient(SUPABASE_URL ?? "", SUPABASE_KEY ?? "", {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return _supabase;
+}
+
+// Proxy preserves the existing supabase.from(...) call sites while deferring
+// client construction until the first property access at request time.
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    const client = getSupabase() as unknown as Record<string | symbol, unknown>;
+    const value = client[prop];
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(client) : value;
+  },
 });
 
 export const SESSION_COOKIE = "sb_session";
