@@ -8,6 +8,8 @@ import { cookies, headers } from "next/headers";
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { validatePhone, countryByIso } from "@/app/lib/countries";
+import type { z } from "zod";
+import "./env"; // validate + log server configuration once at startup
 
 export { validatePhone, countryByIso };
 
@@ -24,6 +26,10 @@ function getSupabase(): SupabaseClient {
   if (!_supabase) {
     _supabase = createClient(SUPABASE_URL ?? "", SUPABASE_KEY ?? "", {
       auth: { persistSession: false, autoRefreshToken: false },
+      // supabase-js queries through fetch, which Next.js caches by default — that
+      // makes every read return stale data (old bio, old avatar, etc.). Force
+      // `no-store` so every query hits the database live (true real-time).
+      global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, cache: "no-store" }) },
     });
   }
   return _supabase;
@@ -142,8 +148,77 @@ export function rateLimit(key: string, limit: number, windowMs: number): boolean
   bucket.count += 1;
   return true;
 }
+
+// Persistent, cross-instance rate limit backed by a `rate_limits` table so limits
+// hold across serverless instances (real protection under load). Degrades to the
+// in-memory limiter if the table hasn't been created yet, so it never breaks a
+// request. Returns true when the call is allowed.
+//   CREATE TABLE rate_limits (key text PRIMARY KEY, count int NOT NULL, reset_at timestamptz NOT NULL);
+export async function rateLimitDb(key: string, limit: number, windowMs: number): Promise<boolean> {
+  const now = Date.now();
+  try {
+    const { data, error } = await supabase.from("rate_limits").select("count, reset_at").eq("key", key).maybeSingle();
+    if (error) return rateLimit(key, limit, windowMs); // table missing / unreachable → in-memory
+    if (!data || new Date(data.reset_at).getTime() < now) {
+      await supabase.from("rate_limits").upsert({ key, count: 1, reset_at: new Date(now + windowMs).toISOString() });
+      return true;
+    }
+    if (Number(data.count) >= limit) return false;
+    await supabase.from("rate_limits").update({ count: Number(data.count) + 1 }).eq("key", key);
+    return true;
+  } catch {
+    return rateLimit(key, limit, windowMs);
+  }
+}
+
+// ── Admin authorisation ───────────────────────────────────────────────────────
+// Admins are configured out-of-band (env ADMIN_EMAILS, comma-separated) so admin
+// power is never granted by anything a user can set on their own profile.
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ?? "brodygallagher4@gmail.com")
+  .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+export const isAdmin = (email?: string | null): boolean => !!email && ADMIN_EMAILS.includes(email.toLowerCase());
+// Resolve the caller and require admin — returns the email, or a ready response.
+export async function requireAdmin(): Promise<{ email: string } | NextResponse> {
+  const email = await getSessionEmail();
+  if (!email) return unauthorized();
+  if (!isAdmin(email)) return json({ error: "Admin access required." }, 403);
+  return { email };
+}
 export function clientIp(req: Request): string {
   return (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+}
+
+// ── CSRF defence-in-depth ─────────────────────────────────────────────────────
+// The session cookie is already SameSite=Lax (browsers won't attach it to a
+// cross-site POST), but we also verify the request Origin/Referer matches the
+// host on every state-changing route. A forged cross-site request is rejected
+// before it can touch money, orders, or account data. Same-origin browser
+// requests always carry a matching Origin, so legitimate traffic is unaffected.
+// Parse + validate a request body against a Zod schema. Returns the typed data,
+// or a ready 400 with a human-readable, field-scoped message (never throws).
+export async function parseBody<S extends z.ZodTypeAny>(
+  req: Request,
+  schema: S,
+): Promise<{ data?: z.infer<S>; bad?: NextResponse }> {
+  const raw = await req.json().catch(() => ({}));
+  const result = schema.safeParse(raw);
+  if (!result.success) {
+    const first = result.error.issues[0];
+    return { bad: json({ error: first?.message ?? "Invalid request.", field: first?.path.join(".") }, 400) };
+  }
+  return { data: result.data };
+}
+
+export function assertSameOrigin(req: Request): NextResponse | null {
+  const host = req.headers.get("host");
+  const source = req.headers.get("origin") ?? req.headers.get("referer");
+  if (!source) return null; // no Origin/Referer (native app, curl) — Lax cookie still guards
+  try {
+    if (host && new URL(source).host !== host) return json({ error: "Cross-origin request blocked." }, 403);
+  } catch {
+    return json({ error: "Invalid request origin." }, 403);
+  }
+  return null;
 }
 
 export const dynamic = "force-dynamic";

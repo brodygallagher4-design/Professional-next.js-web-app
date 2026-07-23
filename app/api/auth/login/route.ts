@@ -2,18 +2,19 @@ import type { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
   SUPABASE_URL, SUPABASE_KEY, EMAIL_RE, ensureProfile, createSession, setSessionCookie,
-  SESSION_DAYS, rateLimit, clientIp, json, dbMissing,
+  SESSION_DAYS, rateLimitDb, clientIp, json, dbMissing, assertSameOrigin
 } from "@/server/api";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const csrf = assertSameOrigin(req); if (csrf) return csrf;
   const miss = dbMissing(); if (miss) return miss;
   const b = await req.json().catch(() => ({} as Record<string, unknown>));
   const email = String(b.email ?? "").trim().toLowerCase();
   const password = String(b.password ?? "");
   if (!EMAIL_RE.test(email) || !password) return json({ error: "Email and password are required." }, 400);
-  if (!rateLimit(`login:${clientIp(req)}`, 15, 10 * 60 * 1000) || !rateLimit(`login:${clientIp(req)}:${email}`, 8, 10 * 60 * 1000)) {
+  if (!(await rateLimitDb(`login:${clientIp(req)}`, 15, 10 * 60 * 1000)) || !(await rateLimitDb(`login:${clientIp(req)}:${email}`, 8, 10 * 60 * 1000))) {
     return json({ error: "Too many login attempts — please wait a few minutes and try again." }, 429);
   }
   // Fresh client per attempt so the shared service client never carries auth state.

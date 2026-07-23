@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Alert01Icon, ArrowDown01Icon, BankIcon, Cancel01Icon, Copy01Icon, Download01Icon, Shield01Icon, Upload01Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
 import { DesktopTopNav, FONT, AppMobileHeader, P, MBG, useProfile, useScrollLock, Skeleton, useLoadGate } from "../shared";
-import { fetchWalletTransactions, fetchWalletBalance, readCache, writeCache, type ApiWalletTx } from "../lib/api";
+import { fetchWalletTransactions, startDeposit, readCache, writeCache, type ApiWalletTx } from "../lib/api";
+import { useWalletBalanceQuery, useInvalidate, qk } from "../lib/query";
+import { toast } from "../toast";
 import type { Page } from "../shared";
 
 type Tab = "deposit" | "withdrawal" | "security";
@@ -136,11 +138,15 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const [wAmount, setWAmount] = useState("");
   // The account's own live ledger — no demo fallback. A new wallet is empty.
   const [ledger, setLedger] = useState<WTx[]>(() => readCache<WTx[]>("sb-wallet-tx") ?? []);
-  // Real balance from the server (authoritative — includes sales and purchases).
-  const [balance, setBalance] = useState<number>(() => readCache<number>("sb-wallet-balance") ?? 0);
+  // Real balance from the server (authoritative — includes sales and purchases),
+  // served through TanStack Query so it's cached + shared with the rest of the app.
+  const { data: balData, isFetched: balFetched } = useWalletBalanceQuery();
+  const balance = useMemo(() => balData ?? readCache<number>("sb-wallet-balance") ?? 0, [balData]);
+  useEffect(() => { if (balData != null) writeCache("sb-wallet-balance", balData); }, [balData]);
   // Loading gate — always show a visible skeleton beat, then the real data.
   const { loaded: txLoaded, finishLoading: finishTx } = useLoadGate(600);
   const { loaded: balLoaded, finishLoading: finishBal } = useLoadGate(600);
+  useEffect(() => { if (balFetched) finishBal(); }, [balFetched, finishBal]);
   useEffect(() => {
     let cancelled = false;
     fetchWalletTransactions().then((rows) => {
@@ -148,11 +154,6 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
       if (rows) { const mapped = rows.map(mapTx); writeCache("sb-wallet-tx", mapped); setLedger(mapped); }
       finishTx();
     }).catch(() => { if (!cancelled) finishTx(); });
-    fetchWalletBalance().then((r) => {
-      if (cancelled) return;
-      if (r) { writeCache("sb-wallet-balance", r.balance); setBalance(r.balance); }
-      finishBal();
-    }).catch(() => { if (!cancelled) finishBal(); });
     return () => { cancelled = true; };
   }, []);
   // Deposits/withdrawals are disabled until the payment provider is integrated.
@@ -183,6 +184,30 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const [coin, setCoin] = useState("USDT");
   const [amount, setAmount] = useState("");
   const [notice, setNotice] = useState(false);
+  const [depositing, setDepositing] = useState(false);
+  const invalidate = useInvalidate();
+  // Kick off a Korapay deposit: validate the USD amount, get the hosted checkout
+  // URL from our server, and redirect. The wallet is credited only by the webhook.
+  const beginDeposit = async () => {
+    const usd = Number.parseFloat(amount);
+    if (!Number.isFinite(usd) || usd < 1) { toast.error("Enter an amount of at least $1.", { title: "Deposit" }); return; }
+    if (usd > 10000) { toast.error("Maximum deposit is $10,000.", { title: "Deposit" }); return; }
+    setDepositing(true);
+    const r = await startDeposit(usd, currency);
+    setDepositing(false);
+    if (!r.ok || !r.checkout_url) { toast.error(r.error ?? "Could not start the deposit.", { title: "Deposit" }); return; }
+    window.location.href = r.checkout_url; // Korapay hosted checkout
+  };
+  // Returning from Korapay's checkout → confirm the balance in the background.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("deposit") === "processing") {
+      toast.success("We're confirming your payment — your balance updates the moment it clears.", { title: "Deposit received" });
+      invalidate([[...qk.wallet]]);
+      window.history.replaceState({}, "", "/wallet");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const tabItems: { id: Tab; label: string }[] = [{ id: "deposit", label: "Deposit History" }, { id: "withdrawal", label: "Withdrawal History" }, { id: "security", label: "Security" }];
   const exchangeRates: Record<string, { symbol: string; rate: number }> = { NGN: { symbol: "₦", rate: 1588 }, GHS: { symbol: "GH₵", rate: 15.4 }, KES: { symbol: "KSh", rate: 129 }, ZAR: { symbol: "R", rate: 18.2 }, XAF: { symbol: "FCFA", rate: 603 }, XOF: { symbol: "CFA", rate: 603 } };
   const parsedAmount = Number.parseFloat(amount);
@@ -226,11 +251,7 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
         </div>
       </div>
     )}
-    {funding && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-[3px] sm:p-5"><div className="max-h-[80vh] w-full max-w-[500px] overflow-y-auto rounded-[24px] border border-[#142037] bg-[#07101f] p-4 shadow-[0_28px_90px_rgba(0,0,0,.55)] sm:p-5"><div className="flex items-start justify-between"><div className="flex items-center gap-4"><span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#4a1814] text-[#ff5a37]"><WalletMoneyIcon size={22}/></span><div><h2 className="text-[19px] font-bold tracking-[-.03em]">Add Funds</h2><p className="mt-0.5 text-[14px] text-[#a5b3c6]">Fund your wallet securely</p></div></div><button onClick={() => setFunding(false)} className="rounded-full p-1 text-white transition hover:bg-white/10"><Cancel01Icon size={21}/></button></div><div className="mt-4 grid grid-cols-2 rounded-[18px] bg-[#142034] p-1.5"><button onClick={() => setFundTab("local")} className={`flex h-11 items-center justify-center gap-2 rounded-[14px] text-[14px] font-bold transition ${fundTab === "local" ? "bg-black text-white" : "text-[#9ca9bc]"}`}><BankIcon size={23}/>Local</button><button onClick={() => setFundTab("crypto")} className={`flex h-11 items-center justify-center gap-2 rounded-[14px] text-[14px] font-bold transition ${fundTab === "crypto" ? "bg-black text-white" : "text-[#9ca9bc]"}`}><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[15px] font-black text-black">₿</span>Crypto</button></div>{fundTab === "local" ? <><div className="mt-3.5 flex items-center justify-between"><h3 className="text-[14px] font-bold">Select currency</h3><span className="text-[12px] text-[#acb9c9]">One currency per deposit</span></div><div className="mt-3 grid grid-cols-3 gap-2">{[["🇳🇬", "NGN", "Nigerian Naira"],["🇬🇭", "GHS", "Ghana Cedis"],["🇰🇪", "KES", "Kenya Shilling"],["🇿🇦", "ZAR", "South African Rand"],["🇨🇲", "XAF", "CFA Franc (BEAC)"],["🇨🇲", "XOF", "CFA Franc (BCEAO)"]].map(([flag, code, note]) => <button key={code} onClick={() => setCurrency(code)} className={`flex h-[50px] items-center gap-2 rounded-xl border px-2.5 text-left transition ${currency === code ? "border-[#f04e23] bg-[#391813]" : "border-[#1e2b3f] bg-black"}`}><span className="text-[22px]">{flag}</span><span><b className="block text-[14px]">{code}</b><small className="block text-[8px] text-[#9eabc0]">{note}</small></span></button>)}</div><label className="mt-3.5 block text-[14px] font-bold">Amount<div className="mt-2 flex flex-col items-center rounded-[16px] bg-[#08111e] py-2"><div className="flex items-center gap-2"><span className="text-[21px] text-[#9ca9bc]">$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0" onFocus={(event) => event.currentTarget.select()} className="w-32 bg-transparent text-center text-[28px] font-bold tracking-[-.04em] outline-none placeholder:text-[#71819a]"/></div><span className="text-[13px] font-medium text-[#c9d2df]">{rateLabel}</span></div></label><div className="mt-3 border-t border-[#263448]"/><div className="mt-3 flex gap-3 rounded-xl border border-[#f04e23] bg-[#4a1a17] px-4 py-2.5"><Shield01Icon size={27} className="shrink-0 text-[#ff5a37]"/><div><h4 className="text-[13px] font-bold">Secured and Trusted</h4><p className="mt-1 text-[11px] leading-4 text-white">Your funds are protected with a bank level security and processed through a licensed payment partner</p></div></div><button onClick={() => {
-                setFunding(false);
-                setAmount("");
-                setComingSoon("Deposits aren't available yet — our secure payment provider is being connected. You'll be able to fund your wallet as soon as it's live.");
-              }} className="mt-3 h-12 w-full rounded-full bg-[#ff542f] text-[14px] font-bold transition hover:bg-[#ff6a4a] active:scale-[.98]">Continue to payment</button><p className="mt-2 text-center text-[10px] text-white/80">♙ You will be redirected to a secure service provider</p></> : <><h3 className="mt-5 text-[15px] font-bold">My static wallets</h3><div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">{[["USDT", "#e62929"],["USDC", "#2775ca"],["BTC", "#f7931a"],["ETH", "#627eea"],["LTC", "#345dbe"],["BNB", "#f3ba2f"],["TRX", "#ef0027"]].map(([symbol, color]) => <CoinChip key={symbol} symbol={symbol} color={color} active={coin === symbol} onClick={() => setCoin(symbol)}/>)}</div><div className="mt-5 rounded-2xl border border-[#243149] bg-black p-4"><label className="block text-[13px] font-bold">Select Network<select className="mt-2 h-10 w-full rounded-md border border-[#34435b] bg-[#0c1627] px-3 text-[13px] outline-none"><option>TRC 20</option><option>ERC 20</option></select></label><div className="my-5 flex justify-center"><QRCode /></div><div className="flex min-w-0 items-center gap-2 rounded-xl bg-[#142034] px-3 py-3"><span className="min-w-0 flex-1 truncate text-[12px]">TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM</span><button onClick={() => copyText("TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ff5a37]"><Copy01Icon size={17}/></button></div><div className="mt-4 rounded-xl border border-[#ff4e2e] bg-[#451a18] px-4 py-4"><div className="flex gap-3"><Alert01Icon size={22} className="shrink-0 text-[#ff5a37]"/><div><h4 className="text-[12px] font-bold">Before you deposit</h4><ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-4"><li>Deposits below ~8 USD may not be processed.</li><li>Send only {coin} to this address.</li><li>Make sure you use the correct network. Incorrect network may lead to loss of funds.</li></ul></div></div></div></div></>}</div></div>}
+    {funding && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-[3px] sm:p-5"><div className="max-h-[80vh] w-full max-w-[500px] overflow-y-auto rounded-[24px] border border-[#142037] bg-[#07101f] p-4 shadow-[0_28px_90px_rgba(0,0,0,.55)] sm:p-5"><div className="flex items-start justify-between"><div className="flex items-center gap-4"><span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#4a1814] text-[#ff5a37]"><WalletMoneyIcon size={22}/></span><div><h2 className="text-[19px] font-bold tracking-[-.03em]">Add Funds</h2><p className="mt-0.5 text-[14px] text-[#a5b3c6]">Fund your wallet securely</p></div></div><button onClick={() => setFunding(false)} className="rounded-full p-1 text-white transition hover:bg-white/10"><Cancel01Icon size={21}/></button></div><div className="mt-4 grid grid-cols-2 rounded-[18px] bg-[#142034] p-1.5"><button onClick={() => setFundTab("local")} className={`flex h-11 items-center justify-center gap-2 rounded-[14px] text-[14px] font-bold transition ${fundTab === "local" ? "bg-black text-white" : "text-[#9ca9bc]"}`}><BankIcon size={23}/>Local</button><button onClick={() => setFundTab("crypto")} className={`flex h-11 items-center justify-center gap-2 rounded-[14px] text-[14px] font-bold transition ${fundTab === "crypto" ? "bg-black text-white" : "text-[#9ca9bc]"}`}><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[15px] font-black text-black">₿</span>Crypto</button></div>{fundTab === "local" ? <><div className="mt-3.5 flex items-center justify-between"><h3 className="text-[14px] font-bold">Select currency</h3><span className="text-[12px] text-[#acb9c9]">One currency per deposit</span></div><div className="mt-3 grid grid-cols-3 gap-2">{[["🇳🇬", "NGN", "Nigerian Naira"],["🇬🇭", "GHS", "Ghana Cedis"],["🇰🇪", "KES", "Kenya Shilling"],["🇿🇦", "ZAR", "South African Rand"],["🇨🇮", "XOF", "West African CFA"]].map(([flag, code, note]) => <button key={code} onClick={() => setCurrency(code)} className={`flex h-[50px] items-center gap-2 rounded-xl border px-2.5 text-left transition ${currency === code ? "border-[#f04e23] bg-[#391813]" : "border-[#1e2b3f] bg-black"}`}><span className="text-[22px]">{flag}</span><span><b className="block text-[14px]">{code}</b><small className="block text-[8px] text-[#9eabc0]">{note}</small></span></button>)}</div><label className="mt-3.5 block text-[14px] font-bold">Amount<div className="mt-2 flex flex-col items-center rounded-[16px] bg-[#08111e] py-2"><div className="flex items-center gap-2"><span className="text-[21px] text-[#9ca9bc]">$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0" onFocus={(event) => event.currentTarget.select()} className="w-32 bg-transparent text-center text-[28px] font-bold tracking-[-.04em] outline-none placeholder:text-[#71819a]"/></div><span className="text-[13px] font-medium text-[#c9d2df]">{rateLabel}</span></div></label><div className="mt-3 border-t border-[#263448]"/><div className="mt-3 flex gap-3 rounded-xl border border-[#f04e23] bg-[#4a1a17] px-4 py-2.5"><Shield01Icon size={27} className="shrink-0 text-[#ff5a37]"/><div><h4 className="text-[13px] font-bold">Secured and Trusted</h4><p className="mt-1 text-[11px] leading-4 text-white">Your funds are protected with a bank level security and processed through a licensed payment partner</p></div></div><button onClick={beginDeposit} disabled={depositing} className="mt-3 h-12 w-full rounded-full bg-[#ff542f] text-[14px] font-bold transition hover:bg-[#ff6a4a] active:scale-[.98] disabled:opacity-60">{depositing ? "Starting payment…" : "Continue to payment"}</button><p className="mt-2 text-center text-[10px] text-white/80">♙ You will be redirected to a secure service provider</p></> : <><h3 className="mt-5 text-[15px] font-bold">My static wallets</h3><div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">{[["USDT", "#e62929"],["USDC", "#2775ca"],["BTC", "#f7931a"],["ETH", "#627eea"],["LTC", "#345dbe"],["BNB", "#f3ba2f"],["TRX", "#ef0027"]].map(([symbol, color]) => <CoinChip key={symbol} symbol={symbol} color={color} active={coin === symbol} onClick={() => setCoin(symbol)}/>)}</div><div className="mt-5 rounded-2xl border border-[#243149] bg-black p-4"><label className="block text-[13px] font-bold">Select Network<select className="mt-2 h-10 w-full rounded-md border border-[#34435b] bg-[#0c1627] px-3 text-[13px] outline-none"><option>TRC 20</option><option>ERC 20</option></select></label><div className="my-5 flex justify-center"><QRCode /></div><div className="flex min-w-0 items-center gap-2 rounded-xl bg-[#142034] px-3 py-3"><span className="min-w-0 flex-1 truncate text-[12px]">TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM</span><button onClick={() => copyText("TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ff5a37]"><Copy01Icon size={17}/></button></div><div className="mt-4 rounded-xl border border-[#ff4e2e] bg-[#451a18] px-4 py-4"><div className="flex gap-3"><Alert01Icon size={22} className="shrink-0 text-[#ff5a37]"/><div><h4 className="text-[12px] font-bold">Before you deposit</h4><ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-4"><li>Deposits below ~8 USD may not be processed.</li><li>Send only {coin} to this address.</li><li>Make sure you use the correct network. Incorrect network may lead to loss of funds.</li></ul></div></div></div></div></>}</div></div>}
     {notice && <div role="status" className="fixed bottom-24 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-[#1d2939] px-5 py-3 text-[13px] font-semibold shadow-2xl">Our support team has been notified.<button onClick={() => setNotice(false)} className="ml-3 text-[#f04e23]">Close</button></div>}
     {comingSoon && (
       <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]" onClick={() => setComingSoon("")}>

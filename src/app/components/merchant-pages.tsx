@@ -6,9 +6,12 @@ import {
   Search01Icon, StarIcon, UserIcon, FavouriteIcon, ThumbsUpIcon, ThumbsDownIcon,
   Camera01Icon, PlayCircleIcon, CheckmarkBadge01Icon,
 } from "hugeicons-react";
-import { DesktopTopNav, FONT, AppMobileHeader, setStoreMerchant, getStoreMerchant, sellerSlug } from "../shared";
-import { fetchProfile, fetchSellerReviews, fetchStorefront, type ApiReview, type ApiStoreAd } from "../lib/api";
+import { DesktopTopNav, FONT, AppMobileHeader, setStoreMerchant, getStoreMerchant, sellerSlug, VerifiedBadge, BrandIcon, BRAND_LOGOS } from "../shared";
+import type { BrandKey } from "../shared";
+import { fetchProfile, fetchSellerReviews, fetchStorefront, fetchMerchantStatus, type ApiReview, type ApiStoreAd, type ApiStatus } from "../lib/api";
 import { fetchMerchants, readCache, writeCache } from "../lib/api";
+import { StatusRing, StatusViewer } from "./status";
+import { countryByIso } from "../lib/countries";
 import { ReviewsList, DARK_REVIEW_PALETTE } from "./reviews";
 import type { Page, StoreMerchant } from "../shared";
 
@@ -28,36 +31,11 @@ interface MerchantCard {
 }
 
 // ─── SMALL BUILDING BLOCKS ────────────────────────────────────────────────────────
-function VerifiedStarBadge() {
-  return (
-    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#ffc24b] shadow-[0_1px_3px_rgba(0,0,0,.4)]">
-      <StarIcon size={10} className="fill-white text-white" />
-    </span>
-  );
-}
-
-function VerifiedShield({ size = 20 }: { size?: number }) {
-  return (
-    <span className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
-      <svg viewBox="0 0 24 24" width={size} height={size}>
-        <path d="M12 2l7 3v6c0 4.6-3 8.3-7 9.6C8 19.3 5 15.6 5 11V5l7-3z" fill="#1f9d55" />
-        <path d="M9 12l2 2 4-4.2" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </span>
-  );
-}
+// Both use the shared premium verified seal so every badge matches.
+function VerifiedStarBadge() { return <VerifiedBadge size={18} />; }
+function VerifiedShield({ size = 20 }: { size?: number }) { return <VerifiedBadge size={size} />; }
 
 // Dark circular tile holding the green WhatsApp glyph (matches product rows)
-function WhatsAppBubble({ size = 40 }: { size?: number }) {
-  const g = Math.round(size * 0.6);
-  return (
-    <div className="flex shrink-0 items-center justify-center rounded-full bg-[#0f1b16]" style={{ width: size, height: size, boxShadow: "inset 0 0 0 1px rgba(37,211,102,.25)" }}>
-      <svg width={g} height={g} viewBox="0 0 24 24">
-        <path fill="#25D366" d="M12 2C6.5 2 2 6.5 2 12c0 1.9.5 3.6 1.4 5.2L2 22l4.9-1.3C8.5 21.5 10.2 22 12 22c5.5 0 10-4.5 10-10S17.5 2 12 2zm5.3 14.1c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .3-3.4-.7-2.9-1.2-4.7-4.1-4.8-4.3-.1-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4-.1.7.5.2.6.8 2 .9 2.1.1.1.1.3 0 .5-.1.2-.2.4-.3.5l-.5.5c-.2.2-.3.3-.1.6.2.3.9 1.4 1.9 2.3 1.3 1.1 2.3 1.5 2.6 1.6.3.1.5.1.6-.1.2-.2.7-.9.9-1.2.2-.3.4-.2.6-.1l2 1c.3.1.5.2.5.3.2.2.2.8 0 1.4z" />
-      </svg>
-    </div>
-  );
-}
 
 // Circular bar-chart stat glyph
 function StatGlyph({ color }: { color: string }) {
@@ -236,7 +214,7 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
         rating: String(res.rating),
         sales: res.sales >= 1000 ? (res.sales / 1000).toFixed(1) + "k" : String(res.sales),
         success: res.success_rate + "%",
-        location: res.location ?? undefined,
+        location: res.location ? (countryByIso(res.location)?.name ?? res.location) : undefined,
         joined: res.joined ? new Date(res.joined).toLocaleDateString("en-GB") : undefined,
         bio: res.bio ?? undefined,
       });
@@ -245,15 +223,28 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
     }).catch(() => { if (!cancelled) setResolveFailed(true); });
     return () => { cancelled = true; };
   }, [selected]);
-  // When the seller was chosen in-app (identity already known), still load their
-  // real live ads for the listings grid.
+  // When the seller was chosen in-app (top merchants / "view store"), the in-memory
+  // object lacks bio/location/joined — fetch the authoritative storefront and merge
+  // it in so the real data always shows (never the placeholder fallback).
   useEffect(() => {
     if (!selected || adsLoaded) return;
     const key = selected.id ? String(selected.id) : "";
     if (!key) { setAdsLoaded(true); return; }
     let cancelled = false;
     fetchStorefront(key).then((res) => {
-      if (cancelled) return;
+      if (cancelled) { return; }
+      if (res && res.name) {
+        setSelected((prev) => prev ? {
+          ...prev,
+          avatar: res.avatar_url || prev.avatar,
+          rating: res.rating != null ? String(res.rating) : prev.rating,
+          sales: res.sales >= 1000 ? (res.sales / 1000).toFixed(1) + "k" : String(res.sales),
+          success: res.success_rate != null ? res.success_rate + "%" : prev.success,
+          location: res.location ? (countryByIso(res.location)?.name ?? res.location) : prev.location,
+          joined: res.joined ? new Date(res.joined).toLocaleDateString("en-GB") : prev.joined,
+          bio: res.bio ?? prev.bio,
+        } : prev);
+      }
       setStoreAds(res?.ads ?? []);
       setAdsLoaded(true);
     }).catch(() => { if (!cancelled) setAdsLoaded(true); });
@@ -274,6 +265,8 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
   const [reviews, setReviews] = useState<ApiReview[]>([]);
   const [reviewsLoaded, setReviewsLoaded] = useState(false);
   const merchantKey = selected?.id ? String(selected.id) : "";
+  const [sellerStatus, setSellerStatus] = useState<ApiStatus[]>([]);
+  const [statusViewer, setStatusViewer] = useState(false);
   useEffect(() => {
     if (!merchantKey) return;
     let cancelled = false;
@@ -282,6 +275,7 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
       setReviews(rows ?? []);
       setReviewsLoaded(true);
     });
+    fetchMerchantStatus(merchantKey).then((rows) => { if (!cancelled) setSellerStatus(rows ?? []); });
     return () => { cancelled = true; };
   }, [merchantKey]);
   const positiveCount = reviews.filter((r) => r.sentiment !== "negative").length;
@@ -318,7 +312,7 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
     ...selected,
     location: selected.location ?? "Not specified",
     joined: selected.joined ?? "recently",
-    bio: selected.bio ?? "Verified SimBazaar merchant — trusted seller of social, messaging and subscription accounts.",
+    bio: selected.bio ?? "",   // the seller's real bio only — no fake placeholder
   };
   const nameWords = seller.name.trim().split(/\s+/);
   const bannerTop = nameWords[0].toUpperCase();
@@ -388,12 +382,19 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
           </button>
         </section>
 
-        {/* Avatar */}
-        <div className="relative -mt-8 ml-6 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-[6px] border-[#050506] bg-[#111] shadow-xl ring-2 ring-[#7ed321]/40">
-          {seller.avatar
-            ? <img src={seller.avatar} alt={seller.name} className="h-full w-full object-cover" />
-            : <span className="flex h-full w-full items-center justify-center bg-white text-[34px] font-extrabold text-[#1c1c1c]">{seller.name.charAt(0).toUpperCase()}</span>}
+        {/* Avatar — with a story ring when the seller has an active status */}
+        <div className="relative -mt-8 ml-6 w-fit">
+          <StatusRing active={sellerStatus.length > 0} size={96} onClick={()=>setStatusViewer(true)}>
+            <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-[6px] border-[#050506] bg-[#111] shadow-xl ring-2 ring-[#7ed321]/40">
+              {seller.avatar
+                ? <img src={seller.avatar} alt={seller.name} className="h-full w-full object-cover" />
+                : <span className="flex h-full w-full items-center justify-center bg-white text-[34px] font-extrabold text-[#1c1c1c]">{seller.name.charAt(0).toUpperCase()}</span>}
+            </div>
+          </StatusRing>
         </div>
+        {statusViewer && sellerStatus.length > 0 && (
+          <StatusViewer items={sellerStatus} sellerName={seller.name} avatarUrl={seller.avatar} onClose={()=>setStatusViewer(false)}/>
+        )}
 
         {/* Identity */}
         <div className="mt-4 flex items-center gap-2">
@@ -404,7 +405,7 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
           <span className="flex items-center gap-1"><Location01Icon size={15} className="text-[#f04e23]" />{seller.location}</span>
           <span className="flex items-center gap-1"><Clock01Icon size={15} className="text-[#f04e23]" />Joined {seller.joined}</span>
         </div>
-        <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-[#8a97a8]">{seller.bio}</p>
+        {seller.bio && <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-[#8a97a8]">{seller.bio}</p>}
 
         {/* Merchant link */}
         <div className="mt-4 flex items-center gap-3 rounded-[16px] border border-[#5a2c1a] bg-[#2c150c] px-4 py-3">
@@ -481,7 +482,7 @@ export function SellerStorePage({ setPage }: { setPage: (page: Page) => void }) 
               </div>
             ) : storeAds.map((p, i) => (
               <article key={p.id ?? i} className="flex gap-3 rounded-[16px] border border-[#232b38] bg-[#04070c] p-4 transition hover:border-[#3a4658]">
-                <WhatsAppBubble size={40} />
+                <BrandIcon brand={(p.brand && p.brand in BRAND_LOGOS ? p.brand : "vpn") as BrandKey} size={40} />
                 <div className="min-w-0 flex-1">
                   <h3 className="text-[14px] font-bold uppercase leading-tight">{p.title}</h3>
                   <p className="mt-1 line-clamp-1 text-[12px] text-[#8a97a8] capitalize">{p.category} · {p.quantity} in stock</p>

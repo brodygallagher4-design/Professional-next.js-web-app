@@ -1,14 +1,15 @@
 import type { NextRequest } from "next/server";
 import {
   supabase, EMAIL_RE, countryByIso, validatePhone, ensureProfile, createSession,
-  setSessionCookie, SESSION_DAYS, rateLimit, clientIp, json, dbMissing,
+  setSessionCookie, SESSION_DAYS, rateLimitDb, clientIp, json, dbMissing, assertSameOrigin
 } from "@/server/api";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const csrf = assertSameOrigin(req); if (csrf) return csrf;
   const miss = dbMissing(); if (miss) return miss;
-  if (!rateLimit(`signup:${clientIp(req)}`, 6, 60 * 60 * 1000)) {
+  if (!(await rateLimitDb(`signup:${clientIp(req)}`, 6, 60 * 60 * 1000))) {
     return json({ error: "Too many signup attempts — please try again later." }, 429);
   }
   const b = await req.json().catch(() => ({} as Record<string, unknown>));

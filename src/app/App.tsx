@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Menu01Icon, Cancel01Icon, Search01Icon, ArrowRight01Icon, ArrowLeft01Icon,
   Shield01Icon, FlashIcon, StarIcon, CheckmarkCircle01Icon, UserIcon,
@@ -12,16 +12,21 @@ import {
 import {
   P, BG, BG2, CARD, CARD2, BD, FONT, MBG, MCARD, MCARD2, MBD,
   BRAND_LOGOS, BrandIcon, DesktopTopNav, AppMobileHeader, Brand3D,
-  ThemeContext, useTheme, setStoreMerchant, useProfile, AppMenuButton, clearProfileCache, refreshProfile, CircleUserIcon, CartLineIcon,
-  useAuthed, setAuthedState, isAuthed, EmptyMegaphone, useCartCount, Spinner, useScrollLock, Skeleton, useLoadGate,
+  ThemeContext, useTheme, setStoreMerchant, setCurrentOrder, useProfile, AppMenuButton, clearProfileCache, refreshProfile, CircleUserIcon, CartLineIcon,
+  useAuthed, setAuthedState, isAuthed, EmptyMegaphone, useCartCount, Spinner, useScrollLock, Skeleton, useLoadGate, VerifiedBadge,
 } from "./shared";
 import type { Page, BrandKey } from "./shared";
 import {
-  fetchProducts, fetchMerchants, readCache, writeCache, createPurchase, activateSeller,
-  fetchCart, addCartItem, removeCartItem, fetchNotifications, fetchAds, createAd, fetchWalletBalance,
-  fetchReceivedReviews, fetchPurchases, uploadAvatar, authLogin, authSignup,
-  type ApiNotification, type ApiReview, type ApiAd, type ActivateResult,
+  fetchMerchants, readCache, writeCache, createPurchase, activateSeller,
+  fetchCart, addCartItem, removeCartItem, fetchNotifications, fetchAds, createAd, addAdStock, deleteAd, fetchWalletBalance,
+  fetchReceivedReviews, fetchPurchases, uploadAvatar, authLogin, authSignup, submitReview,
+  fetchMyStatus, fetchMerchantStatus, updateProfile,
+  type ApiNotification, type ApiReview, type ApiAd, type ActivateResult, type ApiStatus, type ApiPurchase,
 } from "./lib/api";
+import { createPortal } from "react-dom";
+import { StatusComposer, StatusViewer, StatusRing, MyStoriesPage } from "./components/status";
+import { CelebrationIcon } from "./components/celebration-icon";
+import { useProductsQuery, useMerchantsQuery, useNotificationsQuery, useInvalidate, qk } from "./lib/query";
 import { ReviewsList, THEMED_REVIEW_PALETTE } from "./components/reviews";
 import { WalletPage } from "./components/wallet-page";
 import { MyPurchasePage } from "./components/purchase-page";
@@ -30,6 +35,7 @@ import { SupportCenterPage } from "./components/support-center-page";
 import { AccountSettingsPage } from "./components/account-settings-page";
 import { ReferralPage } from "./components/referral-page";
 import { SellerStorePage, TopMerchantsPage } from "./components/merchant-pages";
+import { AdminPage } from "./components/admin-page";
 import { COUNTRIES, countryByIso, validatePhone } from "./lib/countries";
 import { ToastHost, toast } from "./toast";
 
@@ -89,6 +95,7 @@ interface Product {
   iconChar: string;
   brand: BrandKey;
   previewUrl?: string;
+  description?: string;
 }
 
 const PRODUCTS: Product[] = [
@@ -570,9 +577,16 @@ function ProductCardListSkeleton() {
 function ProductPurchaseSheet({ product, setPage, onClose }:
   { product:Product; setPage:(p:Page)=>void; onClose:()=>void }) {
   useScrollLock(true); // lock the page behind the slide-up sheet
-  // One row per account the seller listed (their entered quantity)
+  // One selectable row per account the seller listed (their entered quantity).
   const accounts = Array.from({ length: Math.max(product.available, 1) }, (_, i) => ({ id: i + 1, price: product.price }));
   const [selected, setSelected] = useState<Set<number>>(() => new Set([1]));
+  // Prefer the seller's own description; fall back to a sensible line only when
+  // the listing has none, so the cart / purchase always carry real text.
+  const desc = (product.description && product.description.trim())
+    ? product.description.trim()
+    : (product.brand === "whatsapp"
+        ? "USA 🇺🇸 WhatsApp number for verification , it a one time verification number, Code will be available after purchase"
+        : `${product.title} — full account details and access code will be available right after purchase.`);
   const [coupon, setCoupon] = useState("");
   const [couponState, setCouponState] = useState<"none" | "ok" | "bad">("none");
   const [paid, setPaid] = useState(false);
@@ -598,8 +612,7 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
   // Select/deselect an account for the immediate purchase (does NOT touch the cart).
   const toggle = (id: number) => setSelected(prev => {
     const next = new Set(prev);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
   // Explicit "Add to cart" — the only path that writes to the persistent cart.
@@ -607,21 +620,21 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
   const addToCart = (id: number) => {
     if (addedToCart.has(id)) return;
     setAddedToCart(prev => new Set(prev).add(id));
-    addCartItem({ title: product.title, description: `Account ${id}`, brand: product.brand, seller: product.seller, price: product.price });
+    addCartItem({ title: product.title, description: desc, brand: product.brand, seller: product.seller, price: product.price });
     try { sessionStorage.removeItem("sb-cart"); sessionStorage.removeItem("sb-cart-count"); } catch { /* ignore */ }
     toast.success("Added to your cart", { title: product.title });
   };
   const subtotal = [...selected].reduce((sum) => sum + product.price, 0);
+  const openPreview = (id: number) => {
+    const url = product.previewUrl || "https://www.simbazaar.com";
+    window.open(`${url}${url.includes("?") ? "&" : "?"}account=${id}`, "_blank", "noopener");
+  };
   const discount = couponState === "ok" ? +(subtotal * 0.05).toFixed(2) : 0;
   const total = +(Math.max(subtotal - discount, 0) * 1.10).toFixed(2);
 
   const applyCoupon = () => {
     if (!coupon.trim()) return;
     setCouponState(coupon.trim().toUpperCase() === "SIM5" ? "ok" : "bad");
-  };
-  const openPreview = (id: number) => {
-    const url = product.previewUrl || "https://www.simbazaar.com";
-    window.open(`${url}${url.includes("?") ? "&" : "?"}account=${id}`, "_blank", "noopener");
   };
   const viewStore = () => {
     // Pass the real seller identity/stats when known; the storefront resolves
@@ -671,10 +684,6 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
     setTimeout(() => { onClose(); setPage("purchase"); }, 1200);
   };
 
-  const desc = product.brand === "whatsapp"
-    ? "USA 🇺🇸 WhatsApp number for verification , it a one time verification number, Code will be available after purchase"
-    : `${product.title} — full account details and access code will be available right after purchase.`;
-
   return (
     <div className="fixed inset-0 z-[90] flex items-end md:items-center justify-center md:p-5"
       style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)", fontFamily: FONT }}
@@ -701,7 +710,7 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
               </div>
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 <StarsMini rating={product.rating}/>
-                <svg width="14" height="14" viewBox="0 0 24 24"><path d="M12 2l7 3v6c0 4.6-3 8.3-7 9.6C8 19.3 5 15.6 5 11V5l7-3z" fill="#16a34a"/><path d="M9 12l2 2 4-4.2" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <VerifiedBadge size={15}/>
                 <span className="text-[12px] font-semibold" style={{ color: "#16a34a" }}>{product.available} available</span>
               </div>
               <div className="flex items-center gap-1 mt-1.5">
@@ -719,7 +728,7 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1">
                 <span className="text-[14px] font-bold text-white truncate">{product.seller}</span>
-                <svg width="13" height="13" viewBox="0 0 24 24"><path d="M12 2l7 3v6c0 4.6-3 8.3-7 9.6C8 19.3 5 15.6 5 11V5l7-3z" fill="#16a34a"/><path d="M9 12l2 2 4-4.2" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <VerifiedBadge size={14}/>
               </div>
               {sellerStats
                 ? <p className="text-[12px] text-white mt-0.5">{sellerStats.sales} Sales <span className="mx-0.5">•</span> {sellerStats.success} Success Rate</p>
@@ -810,7 +819,7 @@ function ProductPurchaseSheet({ product, setPage, onClose }:
               </div>
             )}
             <button onClick={pay} disabled={selected.size === 0 || paying}
-              className="w-full mt-3.5 py-3.5 rounded-full text-[15px] font-bold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full mt-3.5 py-3 rounded-[6px] text-[14px] font-bold text-white transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
               style={{ background: paid ? "#16a34a" : P }}>
               {paying && <Spinner size={17}/>}
               {paid ? "✓ Payment Successful" : paying ? "Processing payment…" : `Pay $ ${total.toFixed(2)} Securely`}
@@ -1924,87 +1933,64 @@ function PublicMenuButton({ setPage }: { setPage:(p:Page)=>void }) {
   );
 }
 
-function MarketTopbar({ setPage, filterOpen, onFilterClose }: {
-  setPage:(p:Page)=>void;
-  filterOpen:boolean;
-  onFilterClose:()=>void;
-}) {
-  /* ── Filters mode */
-  if (filterOpen) {
-    return (
-      <div className="flex items-center px-4 gap-3" style={{ height: 56, borderBottom: `1px solid ${MBD}` }}>
-        <button onClick={onFilterClose} className="flex items-center gap-2 flex-1">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.08)" }}>
-            <ArrowLeft01Icon size={16} color="var(--sb-nav-active)"/>
-          </div>
-          <span className="text-base font-bold text-white">Filters</span>
-        </button>
-        <TopBarRight setPage={setPage}/>
-      </div>
-    );
-  }
-
-  /* ── Normal mode — unified app header (drawer menu injected) */
+// Signed-in marketplace header. Stays stable whether or not the filter drawer is
+// open — the FilterPanel is a full-screen overlay (its own header + close button +
+// backdrop), so the underlying app header must NOT morph when filters open.
+function MarketTopbar({ setPage }: { setPage:(p:Page)=>void }) {
   return (
     <AppMobileHeader setPage={setPage} menuSlot={<AppMenuButton setPage={setPage}/>}/>
   );
 }
 
-/* Live top merchants for the marketplace strip — falls back to demo data. */
+/* Live top merchants for the marketplace strip — TanStack Query cached (shared,
+   de-duplicated, auto-revalidated); falls back to cache/demo data offline. */
 function useLiveTopMerchants() {
-  const [rows, setRows] = useState(() => readCache<typeof TOP_MERCHANTS>("sb-topmerchants") ?? TOP_MERCHANTS);
-  useEffect(() => {
-    let cancelled = false;
-    fetchMerchants().then((api) => {
-      if (cancelled || !api || api.length === 0) return;
-      const mapped = api.map((m) => ({
-        id: (m.merchant_id ?? m.id) as number | string,
-        name: m.name,
-        rating: Number(m.rating) || 5,
-        sales: m.sales >= 1000 ? `${(m.sales / 1000).toFixed(1)}k` : String(m.sales),
-        avatar: m.avatar_url || "",
-        online: false,
-        hot: Boolean(m.hot),
-      }));
-      writeCache("sb-topmerchants", mapped);
-      setRows(mapped);
-    });
-    return () => { cancelled = true; };
-  }, []);
+  const { data } = useMerchantsQuery();
+  const rows = useMemo(() => {
+    if (!data || data.length === 0) return readCache<typeof TOP_MERCHANTS>("sb-topmerchants") ?? TOP_MERCHANTS;
+    return data.map((m) => ({
+      id: (m.merchant_id ?? m.id) as number | string,
+      name: m.name,
+      rating: Number(m.rating) || 5,
+      sales: m.sales >= 1000 ? `${(m.sales / 1000).toFixed(1)}k` : String(m.sales),
+      avatar: m.avatar_url || "",
+      online: false,
+      hot: Boolean(m.hot),
+      hasStatus: Boolean(m.has_status),
+      statusUnviewed: Boolean(m.status_unviewed),
+    }));
+  }, [data]);
+  useEffect(() => { if (data && data.length > 0) writeCache("sb-topmerchants", rows); }, [data, rows]);
   return rows;
 }
 
-/* Live products from the Railway/Supabase backend — falls back to the
-   built-in demo catalogue whenever the API is unreachable. */
+/* Live products from the Railway/Supabase backend, TanStack Query cached (shared
+   across every marketplace view, de-duplicated, retried, auto-revalidated).
+   Falls back to the session cache when the API is briefly unreachable. */
 function useLiveProducts(): { products: Product[]; loaded: boolean } {
-  // Start from cache (instant on repeat visits) or empty (first visit shows the
-  // skeleton loader), never a demo flash. `loaded` drives the skeleton state.
-  const [products, setProducts] = useState<Product[]>(() => readCache<Product[]>("sb-products") ?? []);
   // Always show the skeleton for a visible beat on every mount (premium feel).
   const { loaded, finishLoading } = useLoadGate(650);
-  useEffect(() => {
-    let cancelled = false;
-    fetchProducts().then((rows) => {
-      if (cancelled) return;
-      const mapped = (rows ?? []).map((r) => ({
-        id: r.id,
-        title: r.title,
-        seller: r.seller,
-        badge: r.badge === "flash" ? "flash" as const : "hand" as const,
-        rating: Number(r.rating) || 3,
-        available: r.available ?? 1,
-        price: Number(r.price) || 0,
-        category: r.category || "social",
-        iconBg: "",
-        iconChar: "",
-        brand: (r.brand in BRAND_LOGOS ? r.brand : "vpn") as BrandKey,
-        previewUrl: r.preview_url ?? undefined,
-      }));
-      if (mapped.length > 0) { writeCache("sb-products", mapped); setProducts(mapped); }
-      finishLoading();
-    }).catch(() => { if (!cancelled) finishLoading(); });
-    return () => { cancelled = true; };
-  }, []);
+  const { data, isFetched } = useProductsQuery();
+  useEffect(() => { if (isFetched) finishLoading(); }, [isFetched, finishLoading]);
+  const products = useMemo<Product[]>(() => {
+    if (!data) return readCache<Product[]>("sb-products") ?? [];
+    return data.map((r) => ({
+      id: r.id,
+      title: r.title,
+      seller: r.seller,
+      badge: r.badge === "flash" ? "flash" as const : "hand" as const,
+      rating: Number(r.rating) || 3,
+      available: r.available ?? 1,
+      price: Number(r.price) || 0,
+      category: r.category || "social",
+      iconBg: "",
+      iconChar: "",
+      brand: (r.brand in BRAND_LOGOS ? r.brand : "vpn") as BrandKey,
+      previewUrl: r.preview_url ?? undefined,
+      description: r.description ?? undefined,
+    }));
+  }, [data]);
+  useEffect(() => { if (products.length > 0) writeCache("sb-products", products); }, [products]);
   return { products, loaded };
 }
 
@@ -2017,6 +2003,10 @@ function MarketMainView({ setView, setPage, filterOpen, setFilterOpen, activeCat
   const { products, loaded } = useLiveProducts();
   const topMerchants = useLiveTopMerchants();
   const [search, setSearch] = useState("");
+  // Merchant status viewer (opened by tapping a ringed avatar — WhatsApp-style).
+  const [statusView, setStatusView] = useState<{ items: ApiStatus[]; name: string; avatar?: string; mid?: string } | null>(null);
+  // Merchants whose status the viewer has already opened this session (grey ring at once).
+  const [seenStatus, setSeenStatus] = useState<Set<string>>(new Set());
   const q = search.trim().toLowerCase();
   const inPrice = products.filter(p => p.price >= priceMin && p.price <= priceMax);
   const inBrand = brandFilters.length ? inPrice.filter(p => brandFilters.includes(p.brand)) : inPrice;
@@ -2044,17 +2034,39 @@ function MarketMainView({ setView, setPage, filterOpen, setFilterOpen, activeCat
           </button>
         </div>
         <div className="flex gap-5 overflow-x-auto pb-2" style={{scrollbarWidth:"none"}}>
-          {topMerchants.map((m, i)=>(
-            <button key={m.name} className="group flex flex-col items-center gap-1.5 shrink-0">
-              <img src={m.avatar} alt={m.name} className="w-14 h-14 rounded-full object-cover transition-all duration-300 group-hover:-translate-y-0.5 group-hover:ring-2 group-hover:ring-offset-2" style={{border:"1px solid var(--sb-bd)", ["--tw-ring-color" as any]:P, ["--tw-ring-offset-color" as any]:"var(--sb-mbg)"}}/>
-              <span className="text-[12px] font-bold text-white text-center max-w-[76px] truncate leading-tight">
-                {m.name}{(m as {hot?:boolean}).hot && <span className="ml-0.5">🔥</span>}
-              </span>
-              <span className="flex items-center gap-1 text-[11px] leading-none" style={{color:"var(--sb-chip-text)"}}>
-                {m.rating} <StarIcon size={11} color="#f5a623" fill="#f5a623"/> {m.sales} sales
-              </span>
-            </button>
-          ))}
+          {topMerchants.map((m, i)=>{
+            const mid = String((m as {id?:number|string}).id ?? "");
+            const openStore = () => { setStoreMerchant({ id: mid, name: m.name, avatar: m.avatar || undefined, rating: String(m.rating), sales: String(m.sales) }); setPage("store"); };
+            const hasStatus = Boolean((m as {hasStatus?:boolean}).hasStatus);
+            // Unviewed = server says unseen AND not opened locally this session.
+            const unviewed = hasStatus && Boolean((m as {statusUnviewed?:boolean}).statusUnviewed) && !seenStatus.has(mid);
+            // Tapping a ringed avatar opens the STATUS (like WhatsApp); no status → the store.
+            const tapAvatar = async () => {
+              if (!hasStatus) { openStore(); return; }
+              const items = await fetchMerchantStatus(mid);
+              if (items && items.length) setStatusView({ items, name: m.name, avatar: m.avatar || undefined, mid });
+              else openStore();
+            };
+            return (
+              <div key={m.name} className="group flex flex-col items-center gap-1.5 shrink-0">
+                <button onClick={tapAvatar} aria-label={hasStatus ? "View status" : "Open storefront"}
+                  className="relative grid place-items-center rounded-full transition-transform active:scale-95 group-hover:-translate-y-0.5"
+                  style={hasStatus ? { width:62, height:62, padding:3, background: unviewed ? "conic-gradient(from 210deg, #ffb347, #f04e23, #db2777, #f04e23, #ffb347)" : "rgba(255,255,255,0.32)" } : undefined}>
+                  <span className="grid place-items-center rounded-full" style={hasStatus ? { padding:2, background:"var(--sb-mbg)" } : undefined}>
+                    <img src={m.avatar} alt={m.name} className="w-14 h-14 rounded-full object-cover" style={{border:"1px solid var(--sb-bd)"}}/>
+                  </span>
+                </button>
+                <button onClick={openStore} className="flex flex-col items-center gap-0.5">
+                  <span className="text-[12px] font-bold text-white text-center max-w-[76px] truncate leading-tight">
+                    {m.name}{(m as {hot?:boolean}).hot && <span className="ml-0.5">🔥</span>}
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] leading-none" style={{color:"var(--sb-chip-text)"}}>
+                    {m.rating} <StarIcon size={11} color="#f5a623" fill="#f5a623"/> {m.sales} sales
+                  </span>
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -2142,6 +2154,10 @@ function MarketMainView({ setView, setPage, filterOpen, setFilterOpen, activeCat
             : Array.from({length:6}).map((_,i)=><ProductCardListSkeleton key={i}/>)}
         </div>
       </div>
+      {statusView && (
+        <StatusViewer items={statusView.items} sellerName={statusView.name} avatarUrl={statusView.avatar}
+          onClose={()=>{ if (statusView.mid) setSeenStatus(prev => new Set(prev).add(statusView.mid!)); setStatusView(null); }}/>
+      )}
     </div>
   );
 }
@@ -2345,9 +2361,9 @@ function MarketplacePage({ setPage }: { setPage:(p:Page)=>void }) {
           header (brand + theme toggle + menu); signed-in users get the full app
           header with cart, notifications and profile. */}
       <div className="md:hidden sticky top-0 z-50" style={{background:MBG}}>
-        {publicVisitor && !filterOpen
+        {publicVisitor
           ? <PublicMarketHeader setPage={setPage}/>
-          : <MarketTopbar setPage={setPage} filterOpen={filterOpen} onFilterClose={()=>setFilterOpen(false)}/>}
+          : <MarketTopbar setPage={setPage}/>}
       </div>
 
       {/* Body: sidebar + main content */}
@@ -2858,6 +2874,39 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
   const activeAds = pdata.ads.filter(a => a.status === "active").length;
   const [profileTab, setProfileTab] = useState<"ads" | "reviews">("ads");
   const [copied, setCopied] = useState(false);
+  const isSeller = Boolean(profile.is_seller);
+
+  // Seller status/stories — only sellers can post; own statuses shown behind the avatar ring.
+  const [myStatus, setMyStatus] = useState<ApiStatus[]>([]);
+  const [statusMenu, setStatusMenu] = useState(false);
+  const [composer, setComposer] = useState(false);
+  const [viewer, setViewer] = useState(false);
+  const [myStories, setMyStories] = useState(false);
+  // Inline bio editor (sellers).
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioText, setBioText] = useState(profile.bio ?? "");
+  const [savingBio, setSavingBio] = useState(false);
+  useEffect(() => { setBioText(profile.bio ?? ""); }, [profile.bio]);
+  const saveBio = async () => {
+    if (savingBio) return;
+    setSavingBio(true);
+    const r = await updateProfile({ bio: bioText.trim() });
+    setSavingBio(false);
+    if (!r.ok) { toast.error(r.error ?? "Could not save bio.", { title: "Bio" }); return; }
+    await refreshProfile();
+    toast.success("Bio updated.", { title: "Saved" });
+    setEditingBio(false);
+  };
+  const loadStatus = () => { if (isSeller) fetchMyStatus().then((rows) => setMyStatus(rows ?? [])); };
+  useEffect(() => { loadStatus(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [isSeller]);
+  // Canonical role-based profile URL so navigation + refresh stay consistent
+  // (buyers: /account/profile, sellers: /seller/profile) — was always /profile.
+  useEffect(() => {
+    try {
+      const url = isSeller ? "/seller/profile" : "/account/profile";
+      if (window.location.pathname !== url) window.history.replaceState({}, "", url);
+    } catch { /* ignore */ }
+  }, [isSeller]);
 
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarErr, setAvatarErr] = useState("");
@@ -2937,15 +2986,17 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
           {/* Avatar — overlaps cover bottom */}
           <div className="absolute left-4" style={{ bottom: -52 }}>
             <div className="relative">
-              <div className="w-[100px] h-[100px] rounded-full flex items-center justify-center"
-                style={{ background: "#fff", border: "4px solid var(--sb-mbg)" }}>
-                {profile.avatar_url
-                  ? <img src={profile.avatar_url} alt="Profile" className="w-full h-full rounded-full object-cover"/>
-                  : <CircleUserIcon size={58} color="#1f2937"/>}
-              </div>
-              {/* Upload photo */}
-              <button onClick={pickAvatar} disabled={avatarBusy} aria-label="Upload profile photo"
-                className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full flex items-center justify-center transition-transform active:scale-90 disabled:opacity-60"
+              <StatusRing active={isSeller && myStatus.length > 0} size={100} onClick={()=>{ loadStatus(); setViewer(true); }}>
+                <div className="w-[100px] h-[100px] rounded-full flex items-center justify-center overflow-hidden"
+                  style={{ background: "#fff", border: "4px solid var(--sb-mbg)" }}>
+                  {profile.avatar_url
+                    ? <img src={profile.avatar_url} alt="Profile" className="w-full h-full rounded-full object-cover"/>
+                    : <CircleUserIcon size={58} color="#1f2937"/>}
+                </div>
+              </StatusRing>
+              {/* Plus — sellers get a menu (photo / status); buyers upload a photo directly */}
+              <button onClick={()=> isSeller ? setStatusMenu(v=>!v) : pickAvatar()} disabled={avatarBusy} aria-label={isSeller ? "Add photo or status" : "Upload profile photo"}
+                className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full flex items-center justify-center transition-transform active:scale-90 disabled:opacity-60 z-10"
                 style={{ background: P, border: "2.5px solid var(--sb-mbg)" }}>
                 {avatarBusy
                   ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" className="animate-spin"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
@@ -2953,8 +3004,33 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
                       <path d="M6 1v10M1 6h10" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
                     </svg>}
               </button>
+              {/* Seller plus-menu */}
+              {statusMenu && (
+                <>
+                  <button aria-label="Close" className="fixed inset-0 z-[70] cursor-default" onClick={()=>setStatusMenu(false)}/>
+                  <div className="absolute left-0 top-[108px] z-[80] w-52 overflow-hidden rounded-2xl py-1.5 shadow-[0_16px_44px_rgba(0,0,0,.45)]" style={{ background:"var(--sb-mcard)", border:"1px solid var(--sb-mbd)", animation:"sbPageIn .18s ease both" }}>
+                    <button onClick={()=>{ setStatusMenu(false); pickAvatar(); }} className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13.5px] font-semibold text-white transition hover:bg-white/[0.06]">
+                      <span className="grid h-8 w-8 place-items-center rounded-full" style={{ background:`${P}1f` }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 17l5-4 4 3 3-3 4 4"/></svg></span>
+                      Upload profile photo
+                    </button>
+                    <button onClick={()=>{ setStatusMenu(false); setComposer(true); }} className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13.5px] font-semibold text-white transition hover:bg-white/[0.06]">
+                      <span className="grid h-8 w-8 place-items-center rounded-full" style={{ background:`${P}1f` }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" strokeDasharray="3 3"/><path d="M12 8v8M8 12h8"/></svg></span>
+                      Add to story
+                    </button>
+                    <button onClick={()=>{ setStatusMenu(false); setMyStories(true); }} className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13.5px] font-semibold text-white transition hover:bg-white/[0.06]">
+                      <span className="grid h-8 w-8 place-items-center rounded-full" style={{ background:`${P}1f` }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M9 4v16"/></svg></span>
+                      My Stories
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
+          <StatusComposer open={composer} onClose={()=>setComposer(false)} onPosted={()=>{ loadStatus(); }}/>
+          <MyStoriesPage open={myStories} onClose={()=>setMyStories(false)} onNew={()=>{ setMyStories(false); setComposer(true); }} sellerName={profile.full_name || "You"} avatarUrl={profile.avatar_url}/>
+          {viewer && myStatus.length > 0 && (
+            <StatusViewer items={myStatus} sellerName={profile.full_name || "You"} avatarUrl={profile.avatar_url} isOwner onClose={()=>setViewer(false)} onDeleted={loadStatus}/>
+          )}
         </div>
 
         <div className="px-4">
@@ -2979,6 +3055,28 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
                 <span className="text-xs font-medium" style={{ color: P }}>Joined {profile.joined ? new Date(profile.joined).toLocaleDateString("en-GB") : "recently"}</span>
               </span>
             </div>
+
+            {/* Bio — sellers can edit inline; everyone sees it if set */}
+            {isSeller ? (
+              editingBio ? (
+                <div className="mt-3">
+                  <textarea value={bioText} onChange={(e)=>setBioText(e.target.value.slice(0,500))} autoFocus rows={3} placeholder="Tell buyers about your store — what you sell, delivery time, trust…"
+                    className="w-full resize-none rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                  <div className="mt-2 flex items-center justify-end gap-2">
+                    <span className="mr-auto text-[11px]" style={{ color:"var(--sb-chip-text)" }}>{bioText.length}/500</span>
+                    <button onClick={()=>{ setEditingBio(false); setBioText(profile.bio ?? ""); }} disabled={savingBio} className="rounded-full px-4 py-1.5 text-[12px] font-bold text-white" style={{ border:`1px solid ${MBD}` }}>Cancel</button>
+                    <button onClick={saveBio} disabled={savingBio} className="inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-bold text-white transition hover:opacity-90 disabled:opacity-70" style={{ background:P }}>{savingBio && <Spinner size={13}/>}Save</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={()=>setEditingBio(true)} className="group mt-3 flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[0.03]" style={{ border:`1px dashed ${MBD}` }}>
+                  <span className="flex-1 text-[13px] leading-relaxed" style={{ color: profile.bio ? "var(--sb-nav-active)" : "var(--sb-chip-text)" }}>{profile.bio || "Add a store bio — tell buyers what you sell."}</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0 opacity-70 transition group-hover:opacity-100"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                </button>
+              )
+            ) : profile.bio ? (
+              <p className="mt-3 text-[13px] leading-relaxed" style={{ color:"var(--sb-nav-active)" }}>{profile.bio}</p>
+            ) : null}
           </div>
 
           {/* Merchant link card */}
@@ -3129,19 +3227,31 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
             )}
             {profileTab === "ads" && reviewsLoaded && pdata.ads.length > 0 && (
               <div className="px-4 py-3 space-y-2.5">
-                {pdata.ads.map(ad => (
-                  <div key={ad.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ border: "1px solid " + BD }}>
-                    <BrandIcon brand={(ad.brand in BRAND_LOGOS ? ad.brand : "vpn") as BrandKey} size={36}/>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-bold text-white truncate">{ad.title}</p>
-                      <p className="text-[11px] mt-0.5" style={{ color: "var(--sb-chip-text)" }}>{ad.quantity} available</p>
+                {pdata.ads.map(ad => {
+                  const out = (ad.quantity ?? 0) <= 0;
+                  const low = (ad.quantity ?? 0) > 0 && (ad.quantity ?? 0) <= 3;
+                  const st = ad.status === "active" ? { label:"Active", color:"#4ade80", bg:"rgba(22,163,74,0.14)", dot:"#22c55e" }
+                    : ad.status === "pending" ? { label:"Pending", color:"#fbbf24", bg:"rgba(245,158,11,0.14)", dot:"#f59e0b" }
+                    : { label: ad.status, color:"#f87171", bg:"rgba(239,68,68,0.14)", dot:"#ef4444" };
+                  return (
+                    <div key={ad.id} className="flex items-center gap-3.5 rounded-2xl p-4" style={{ background:MCARD, border:`1px solid ${MBD}` }}>
+                      <BrandIcon brand={(ad.brand in BRAND_LOGOS ? ad.brand : "vpn") as BrandKey} size={48}/>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-bold text-[14px] leading-snug line-clamp-1">{ad.title}</p>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1.5">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold capitalize" style={{ background:st.bg, color:st.color }}>
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background:st.dot }}/> {st.label}
+                          </span>
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold"
+                            style={ out ? { background:"rgba(239,68,68,0.14)", color:"#f87171" } : low ? { background:"rgba(245,158,11,0.14)", color:"#fbbf24" } : { background:"rgba(255,255,255,0.06)", color:"#9ca3af" } }>
+                            {out ? "Out of stock" : `${ad.quantity} in stock`}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-white font-extrabold text-[16px] shrink-0" style={{ fontVariantNumeric:"tabular-nums" }}>${Number(ad.price).toFixed(2)}</span>
                     </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-[13px] font-extrabold text-white">${Number(ad.price).toFixed(2)}</p>
-                      <span className="text-[10px] font-bold capitalize" style={{ color: ad.status === "active" ? "#22c55e" : ad.status === "pending" ? "#f59e0b" : "#ef4444" }}>{ad.status}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             {profileTab === "ads" && reviewsLoaded && pdata.ads.length === 0 && (
@@ -3171,22 +3281,10 @@ const CART_ITEMS_DATA = [
     price: 5.99,
     iconBg: "#166534",
     iconColor: "#4ade80",
+    brand: "vpn" as BrandKey,
+    sellerAvatar: "" as string,
   },
 ];
-
-// Shared product icon for cart/modal
-function ProductIconSquare({ bg="#14532d", size=48 }: { bg?:string; size?:number }) {
-  return (
-    <div className="rounded-xl flex items-center justify-center shrink-0"
-      style={{ width: size, height: size, background: bg }}>
-      {/* WhatsApp-style phone handset */}
-      <svg width={size*0.46} height={size*0.46} viewBox="0 0 22 22" fill="none">
-        <path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.96.96 0 0 0-.98.23l-2.2 2.2a15.05 15.05 0 0 1-6.56-6.55l2.2-2.21a.96.96 0 0 0 .24-.99 11.07 11.07 0 0 1-.56-3.53.97.97 0 0 0-.97-.97H4.04A.97.97 0 0 0 3.07 4c0 9.39 7.61 17 17 17a.97.97 0 0 0 .97-.97v-3.68a.97.97 0 0 0-.97-.97z"
-          fill="white"/>
-      </svg>
-    </div>
-  );
-}
 
 // Elf character SVG (anime-style, peeking from corner)
 function ElfCharacter() {
@@ -3229,10 +3327,30 @@ function ElfCharacter() {
   );
 }
 
+// Small round seller avatar for cart rows / modal — shows the seller's real
+// profile photo, falling back to a neutral person glyph when there is none.
+function CartSellerAvatar({ src, size = 19 }: { src?: string; size?: number }) {
+  const [err, setErr] = useState(false);
+  const show = src && !err;
+  return (
+    <span className="inline-flex items-center justify-center rounded-full shrink-0 overflow-hidden"
+      style={{ width: size, height: size, background: "var(--sb-chip-tint)" }}>
+      {show ? (
+        <img src={src} alt="" className="w-full h-full object-cover" onError={() => setErr(true)}/>
+      ) : (
+        <svg width={Math.round(size * 0.6)} height={Math.round(size * 0.6)} viewBox="0 0 24 24" fill="none" stroke="var(--sb-nav-inactive)" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/>
+        </svg>
+      )}
+    </span>
+  );
+}
+
 function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
   // The account's own cart — no demo fallback; an empty cart shows its own state.
   const [items, setItems] = useState<typeof CART_ITEMS_DATA>(() => readCache<typeof CART_ITEMS_DATA>("sb-cart") ?? []);
   const { loaded, finishLoading } = useLoadGate(550);
+  const invalidate = useInvalidate(); // refresh cached marketplace data after a purchase
   useEffect(() => {
     let cancelled = false;
     fetchCart().then((rows) => {
@@ -3243,10 +3361,17 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
           seller: r.seller,
           sellerEmoji: "🌐",
           product: r.title,
-          description: r.description ?? "",
+          // Ignore the old "Account N" placeholder so a real description shows;
+          // fall back to a clear line when a legacy item has none.
+          description: (() => {
+            const d = (r.description ?? "").trim();
+            return (!d || /^account\s*\d+$/i.test(d)) ? `${r.title} — full account details and access code will be available right after purchase.` : d;
+          })(),
           price: Number(r.price) || 0,
           iconBg: (r.brand in BRAND_LOGOS ? BRAND_LOGOS[r.brand as BrandKey].bg : "#166534"),
           iconColor: "#ffffff",
+          brand: (r.brand in BRAND_LOGOS ? r.brand : "vpn") as BrandKey,
+          sellerAvatar: (r.seller_avatar ?? "") as string,
         }));
         writeCache("sb-cart", mapped);
         setItems(mapped);
@@ -3265,7 +3390,6 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
   const [coupon, setCoupon] = useState("");
   const [showQtyModal, setShowQtyModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<typeof CART_ITEMS_DATA[0]|null>(null);
-  useScrollLock(showQtyModal); // lock background scroll while the quantity modal is open
 
   // Real wallet balance from the server (0 until it loads).
   const [walletBalance, setWalletBalance] = useState(0);
@@ -3279,35 +3403,279 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
   const total = +(subtotal + serviceCharge).toFixed(2);
   const insufficient = walletBalance < total;
 
-  // Reusable item row used in both views
+  // Real-time purchase of the item shown in the Select Quantity popup. The wallet
+  // is charged and the order created server-side (balance re-checked there — the
+  // client never decides affordability), then the item leaves the cart and the
+  // success popup (with the leave-a-review section) opens.
+  const [purchasing, setPurchasing] = useState(false);
+  const [successOrder, setSuccessOrder] = useState<ApiPurchase | null>(null);
+  const [reviewSentiment, setReviewSentiment] = useState<"positive" | "negative" | null>(null);
+  const [reviewText, setReviewText] = useState("");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewDone, setReviewDone] = useState(false);
+  useScrollLock(showQtyModal || !!successOrder);
+  const purchaseItem = async () => {
+    if (!selectedItem || purchasing) return;
+    if (!isAuthed()) { setPage("login"); return; }
+    setPurchasing(true);
+    const item = selectedItem;
+    const result = await createPurchase({
+      title: item.product,
+      glyph: "whatsapp",
+      description: item.description,
+      product_type: item.brand ? item.brand.charAt(0).toUpperCase() + item.brand.slice(1) : "Account",
+      seller: item.seller,
+      price: item.price,
+    });
+    setPurchasing(false);
+    if (!result.ok) {
+      toast.error(result.error ?? "Payment could not be completed.", { title: result.needsFunds ? "Insufficient balance" : "Purchase failed" });
+      return;
+    }
+    try { sessionStorage.removeItem("sb-purchases"); sessionStorage.removeItem("sb-wallet-tx"); } catch { /* ignore */ }
+    removeItem(item.id);              // it's bought — take it out of the cart
+    setShowQtyModal(false);
+    fetchWalletBalance().then((r) => { if (r) setWalletBalance(r.balance); });
+    // Stock + seller sales changed — invalidate the cached marketplace queries so
+    // every open view revalidates in real time (TanStack Query refetch).
+    invalidate([[...qk.products], [...qk.merchants], [...qk.wallet]]);
+    // Open the success popup. Keep the order so "View order details" + the review
+    // can reference it (falls back to a minimal record if the API didn't echo it).
+    setReviewSentiment(null); setReviewText(""); setReviewDone(false);
+    setSuccessOrder(result.order ?? {
+      id: "", title: item.product, buyer: "You", glyph: "whatsapp",
+      description: item.description, product_type: item.brand ? item.brand.charAt(0).toUpperCase() + item.brand.slice(1) : "Account",
+      seller: item.seller, price: item.price, status: "completed", reviewed: false,
+      username: null, password: null, note: null, note_time: null, created_at: new Date().toISOString(),
+    });
+  };
+
+  // Open the trade chat for the just-purchased order.
+  const openOrderDetails = () => {
+    if (!successOrder) return;
+    setCurrentOrder({
+      id: successOrder.id,
+      buyer: successOrder.buyer ?? "You",
+      brand: (selectedItem?.brand ?? "whatsapp") as BrandKey,
+      glyph: (["whatsapp","voice","facebook"].includes(String(successOrder.glyph)) ? successOrder.glyph : "whatsapp") as "whatsapp"|"voice"|"facebook",
+      title: successOrder.title,
+      desc: successOrder.description ?? "",
+      cardSubtitle: successOrder.description ?? "",
+      seller: successOrder.seller ?? "Seller",
+      sellerColor: "#b91c1c",
+      price: Number(successOrder.price) || 0,
+      time: successOrder.note_time ?? "",
+      status: (["pending","completed","cancelled"].includes(String(successOrder.status)) ? successOrder.status : "pending") as "pending"|"completed"|"cancelled",
+      createdAt: successOrder.created_at,
+      productType: successOrder.product_type ?? "Account",
+      username: successOrder.username ?? "",
+      password: successOrder.password ?? "",
+      note: successOrder.note ?? "",
+      noteTime: successOrder.note_time ?? "",
+    });
+    setSuccessOrder(null);
+    setPage("order");
+  };
+
+  // Submit the buyer's review for the purchased order (seller resolved server-side).
+  const sendReview = async () => {
+    if (!successOrder || !reviewSentiment || reviewBusy) return;
+    if (!successOrder.id) { toast.error("This order can't be reviewed here — open it from My Purchase.", { title: "Review" }); return; }
+    setReviewBusy(true);
+    const r = await submitReview({ order_id: successOrder.id, sentiment: reviewSentiment, feedback: reviewText.trim() });
+    setReviewBusy(false);
+    if (!r.ok) { toast.error(r.error ?? "Could not submit your review.", { title: "Review" }); return; }
+    setReviewDone(true);
+    toast.success("Thanks — your review is now on the seller's store.", { title: "Review submitted" });
+  };
+
+  // Reusable item row used in both views — mirrors the reference exactly:
+  // seller (photo + name) on top, then the real brand logo beside the title,
+  // one-line description, price, and the view / delete controls on the price row.
   const ItemRow = ({ item }: { item: typeof CART_ITEMS_DATA[0] }) => (
-    <div className="flex items-start gap-3 py-4">
-      <ProductIconSquare bg={item.iconBg} size={46}/>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-sm">{item.sellerEmoji}</span>
-          <span className="text-[12px] text-gray-400">{item.seller}</span>
-        </div>
-        <p className="text-[13px] font-bold text-white leading-snug">{item.product}</p>
-        <p className="text-[11px] leading-snug mt-0.5 line-clamp-1" style={{ color: "#9ca3af" }}>{item.description}</p>
-        <p className="text-[14px] font-extrabold text-white mt-1.5">$ {item.price.toFixed(2)}</p>
+    <div className="px-4 py-3.5">
+      {/* Seller — indented to align with the title column (logo 46 + gap 12) */}
+      <div className="flex items-center gap-1.5 mb-1.5" style={{ marginLeft: 58 }}>
+        <CartSellerAvatar src={item.sellerAvatar} size={19}/>
+        <span className="text-[12.5px] truncate" style={{ color: "#9ca3af" }}>{item.seller}</span>
       </div>
-      <div className="flex items-center gap-2 shrink-0 self-center">
-        <button onClick={() => { setSelectedItem(item); setShowQtyModal(true); }}
-          className="w-7 h-7 flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-          </svg>
-        </button>
-        <button onClick={() => removeItem(item.id)}
-          className="w-7 h-7 flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-          </svg>
-        </button>
+      {/* Body */}
+      <div className="flex gap-3">
+        <BrandIcon brand={(item.brand && item.brand in BRAND_LOGOS ? item.brand : "vpn") as BrandKey} size={46}/>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[15px] font-bold text-white leading-tight">{item.product}</h3>
+          <p className="text-[12.5px] leading-snug mt-1 line-clamp-1" style={{ color: "#9ca3af" }}>{item.description}</p>
+          <div className="flex items-center justify-between mt-2">
+            <b className="text-[16px] font-extrabold text-white">$ {item.price.toFixed(2)}</b>
+            <div className="flex items-center gap-4 shrink-0">
+              <button onClick={() => { setSelectedItem(item); setShowQtyModal(true); }} aria-label="View item"
+                className="flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+              <button onClick={() => removeItem(item.id)} aria-label="Remove item"
+                className="flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
+
+  /* Select Quantity — centered popup (matches reference). Portaled to <body> so
+     `position:fixed` is never broken by an ancestor transform (page-in anim). */
+  const QtyModal = (showQtyModal && selectedItem && typeof document !== "undefined") ? createPortal(
+    <div className="fixed inset-0 z-[90] flex items-center justify-center p-3"
+      style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)", fontFamily: FONT }}
+      onClick={() => { if (!purchasing) setShowQtyModal(false); }}>
+      {/* Centered pop-up — all four corners rounded, pops in (NOT a slide-up).
+          Wide so it isn't cramped; overflow-hidden clips the elf INSIDE the box. */}
+      <div onClick={e => e.stopPropagation()}
+        className="w-full max-w-[540px] relative overflow-hidden"
+        style={{
+          background: "var(--sb-cart-card)",
+          borderRadius: 22,
+          boxShadow: "0 24px 60px rgba(0,0,0,0.45)",
+          animation: "sbPopIn .2s cubic-bezier(.22,1,.36,1)",
+        }}>
+        <div className="px-5 pt-5 relative" style={{ paddingBottom: 26 }}>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-[21px] font-extrabold text-white">Select Quantity</h3>
+            <button onClick={() => setShowQtyModal(false)} aria-label="Close"
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-all hover:bg-black/5">
+              <Cancel01Icon size={19} color="#9ca3af"/>
+            </button>
+          </div>
+
+          {/* Product info — tiny logo in a soft round chip, full description */}
+          <div className="flex items-start gap-3.5 mb-4">
+            <span className="inline-flex items-center justify-center rounded-full shrink-0" style={{ width: 46, height: 46, background: "rgba(240,120,150,0.14)" }}>
+              <BrandIcon brand={(selectedItem.brand && selectedItem.brand in BRAND_LOGOS ? selectedItem.brand : "vpn") as BrandKey} size={22}/>
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[16px] font-bold text-white leading-snug mb-1">{selectedItem.product}</p>
+              <p className="text-[13px] leading-relaxed mb-2.5" style={{ color: "#9ca3af" }}>{selectedItem.description}</p>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-semibold"
+                style={{ background: "var(--sb-chip)", color: "var(--sb-chip-text)" }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                Delivery In <span className="opacity-80">(5 mins)</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Seller */}
+          <div className="flex items-center gap-2 mb-4">
+            <CartSellerAvatar src={selectedItem.sellerAvatar} size={24}/>
+            <span className="text-[14px] font-semibold text-white">{selectedItem.seller}</span>
+          </div>
+
+          {/* Price + cart */}
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-[22px] font-extrabold text-white tabular-nums">$ {selectedItem.price.toFixed(2)}</span>
+            <span className="w-9 h-9 flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+              </svg>
+            </span>
+          </div>
+
+          {/* Purchase button (dry / slim) — real-time purchase */}
+          <button onClick={purchaseItem} disabled={purchasing}
+            className="w-full py-2.5 rounded-[6px] font-bold text-[13.5px] text-white transition-all hover:opacity-95 active:scale-[0.99] disabled:opacity-70 flex items-center justify-center gap-2"
+            style={{ background: "#22a44b" }}>
+            {purchasing && <Spinner size={15}/>}
+            {purchasing ? "Processing…" : "Purchase"}
+          </button>
+        </div>
+        {/* 3D elf illustration — sits in the box's bottom-right corner, overlapping
+            the Purchase button's right end (clipped inside by the card overflow). */}
+        <div className="absolute bottom-0 right-1.5 pointer-events-none select-none" style={{ transform: "scale(0.62)", transformOrigin: "bottom right" }}>
+          <ElfCharacter/>
+        </div>
+      </div>
+    </div>,
+    document.body
+  ) : null;
+
+  /* Purchase-success popup — celebration mark, order link, leave-a-review. */
+  const SuccessModal = (successOrder && typeof document !== "undefined") ? createPortal(
+    <div className="fixed inset-0 z-[95] flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)", fontFamily: FONT }}
+      onClick={() => setSuccessOrder(null)}>
+      <div onClick={e => e.stopPropagation()} className="w-full max-w-[440px] relative"
+        style={{ background: "var(--sb-cart-card)", borderRadius: 20, boxShadow: "0 24px 60px rgba(0,0,0,0.45)", animation: "sbPopIn .22s cubic-bezier(.22,1,.36,1)" }}>
+        <button onClick={() => setSuccessOrder(null)} aria-label="Close"
+          className="absolute right-4 top-4 w-8 h-8 rounded-full flex items-center justify-center transition hover:bg-black/5">
+          <Cancel01Icon size={19} color="#9ca3af"/>
+        </button>
+        <div className="px-6 pt-8 pb-6 flex flex-col items-center text-center">
+          {/* Celebration mark on a soft pink disc */}
+          <span className="grid place-items-center rounded-full mb-4" style={{ width: 116, height: 116, background: "rgba(240,120,150,0.10)" }}>
+            <CelebrationIcon size={82}/>
+          </span>
+          <h3 className="text-[22px] font-extrabold text-white">Purchase successful</h3>
+          <p className="mt-1 text-[15px]" style={{ color: "#9ca3af" }}>Successfully purchased 1 account</p>
+          <button onClick={openOrderDetails} className="mt-4 text-[15px] font-bold underline underline-offset-2 transition hover:opacity-80" style={{ color: P }}>
+            View order details
+          </button>
+        </div>
+
+        {/* Leave a review */}
+        <div className="px-6 pb-7">
+          <p className="text-[14px] font-bold text-white mb-3">Leave a review</p>
+          {reviewDone ? (
+            <div className="flex items-center gap-2 rounded-xl px-4 py-3 text-[13.5px] font-semibold" style={{ background: "rgba(22,163,74,0.12)", color: "#16a34a" }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Review submitted — it&apos;s now on {successOrder.seller ?? "the seller"}&apos;s store.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setReviewSentiment("positive")}
+                  className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-[14px] font-bold transition active:scale-95"
+                  style={reviewSentiment === "positive"
+                    ? { background: "#16a34a", color: "#fff", border: "1.5px solid #16a34a" }
+                    : { background: "transparent", color: "#16a34a", border: "1.5px solid rgba(22,163,74,0.5)" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 10v11M2 12v7a2 2 0 0 0 2 2h13.5a2 2 0 0 0 2-1.7l1.3-8A2 2 0 0 0 18 9h-5V4a2 2 0 0 0-2-2l-4 8"/></svg>
+                  Positive
+                </button>
+                <button onClick={() => setReviewSentiment("negative")}
+                  className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-[14px] font-bold transition active:scale-95"
+                  style={reviewSentiment === "negative"
+                    ? { background: "#e02d2d", color: "#fff", border: "1.5px solid #e02d2d" }
+                    : { background: "transparent", color: "#e02d2d", border: "1.5px solid rgba(224,45,45,0.5)" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 14V3M22 12V5a2 2 0 0 0-2-2H6.5a2 2 0 0 0-2 1.7l-1.3 8A2 2 0 0 0 6 15h5v5a2 2 0 0 0 2 2l4-8"/></svg>
+                  Negative
+                </button>
+              </div>
+              {reviewSentiment && (
+                <div className="mt-3" style={{ animation: "sbPageIn .18s ease both" }}>
+                  <textarea value={reviewText} onChange={e => setReviewText(e.target.value.slice(0, 500))} rows={3}
+                    placeholder={reviewSentiment === "positive" ? "What did you like about this order?" : "Tell the seller what went wrong…"}
+                    className="w-full resize-none rounded-xl px-3.5 py-3 text-[13.5px] text-white outline-none placeholder:text-gray-500"
+                    style={{ background: "var(--sb-fill)", border: "1px solid var(--sb-mbd)" }}/>
+                  <button onClick={sendReview} disabled={reviewBusy}
+                    className="w-full mt-3 py-3 rounded-[8px] text-[14px] font-bold text-white transition active:scale-[0.99] hover:opacity-90 disabled:opacity-60 flex items-center justify-center gap-2"
+                    style={{ background: P }}>
+                    {reviewBusy && <Spinner size={15}/>}
+                    {reviewBusy ? "Submitting…" : "Submit review"}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  ) : null;
 
   /* ══════════════ EMPTY STATE ══════════════ */
   if (!loaded && items.length === 0) return (
@@ -3326,14 +3694,16 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
       </div>
     </div>
   );
+  // Empty cart — still render the modals so the purchase-success popup shows even
+  // when buying the last item empties the cart (otherwise this branch preempts it).
   if (items.length === 0) return (
+    <>
     <div className="min-h-screen flex flex-col" style={{ background: MBG, fontFamily: FONT }}>
       <div className="sticky top-0 z-50" style={{ background: MBG }}>
         <AppMobileHeader setPage={setPage} cartCount={0} menuSlot={<AppMenuButton setPage={setPage}/>}/>
       </div>
       <div className="flex-1 px-5 pt-6 pb-28">
-        <h1 className="text-[22px] font-extrabold text-white mb-1">Shopping cart</h1>
-        <p className="text-[13px] mb-10" style={{ color: "#9ca3af" }}>All Items (0)</p>
+        <h1 className="text-[22px] font-extrabold text-white mb-10">Shopping cart</h1>
         <div className="flex flex-col items-center pt-10 gap-5">
           <div className="w-[100px] h-[100px] rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.09)" }}>
             <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -3345,80 +3715,10 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
         </div>
       </div>
     </div>
+    {QtyModal}
+    {SuccessModal}
+    </>
   );
-
-  /* Shared modal — centered floating card (all 4 corners rounded) */
-  const QtyModal = showQtyModal && selectedItem ? (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(5px)" }}
-      onClick={() => setShowQtyModal(false)}>
-      {/* Floating card — wide & sleek, all 4 corners rounded */}
-      <div onClick={e => e.stopPropagation()}
-        className="w-full max-w-[560px] relative"
-        style={{
-          background: "#111827",
-          borderRadius: 20,
-          overflow: "hidden",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.7)"
-        }}>
-        <div className="px-6 pt-5 relative" style={{ paddingBottom: 70 }}>
-          {/* Header */}
-          <div className="flex items-center justify-between mb-5">
-            <h3 className="text-[20px] font-extrabold text-white">Select Quantity</h3>
-            <button onClick={() => setShowQtyModal(false)}
-              className="w-8 h-8 rounded-full flex items-center justify-center transition-all hover:bg-white/10">
-              <Cancel01Icon size={18} color="#9ca3af"/>
-            </button>
-          </div>
-
-          {/* Product info */}
-          <div className="flex items-start gap-3 mb-3">
-            <ProductIconSquare bg={selectedItem.iconBg} size={44}/>
-            <div className="flex-1 min-w-0">
-              <p className="text-[14px] font-bold text-white leading-snug mb-0.5">{selectedItem.product}</p>
-              <p className="text-[12px] leading-relaxed mb-2.5" style={{ color: "#9ca3af" }}>{selectedItem.description}</p>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold"
-                style={{ background: "rgba(22,163,74,0.18)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.2)" }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="#4ade80"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                Delivers Instantly
-              </span>
-            </div>
-          </div>
-
-          {/* Seller */}
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 rounded-full flex items-center justify-center text-[13px]"
-              style={{ background: "rgba(255,255,255,0.1)" }}>
-              {selectedItem.sellerEmoji}
-            </div>
-            <span className="text-[13px]" style={{ color: "#9ca3af" }}>{selectedItem.seller}</span>
-          </div>
-
-          {/* Price + cart */}
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-[24px] font-extrabold text-white">$ {selectedItem.price.toFixed(2)}</span>
-            <button className="w-8 h-8 flex items-center justify-center">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
-                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-              </svg>
-            </button>
-          </div>
-
-          {/* Purchase button */}
-          <button className="w-full py-3.5 rounded-xl font-extrabold text-[15px] text-white transition-all hover:opacity-90 active:scale-[0.98]"
-            style={{ background: "#16a34a" }}>
-            Purchase
-          </button>
-
-          {/* Elf peeking from bottom-right of card */}
-          <div className="absolute bottom-0 right-0 pointer-events-none select-none">
-            <ElfCharacter/>
-          </div>
-        </div>
-      </div>
-    </div>
-  ) : null;
 
   /* ══════════════ LIST VIEW (1266 reference) ══════════════ */
   if (cartView === "list") return (
@@ -3427,60 +3727,56 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
       <div className="sticky top-0 z-50" style={{ background: "var(--sb-mbg)" }}>
         <AppMobileHeader setPage={setPage} menuSlot={<AppMenuButton setPage={setPage}/>}/>
         {/* Sub-header: ← + centered title */}
-        <div className="flex items-center px-4 relative" style={{ height: 48, borderBottom: `1px solid var(--sb-mbd)` }}>
+        <div className="flex items-center px-4 relative" style={{ height: 52, background: "var(--sb-mbg)" }}>
           <button onClick={() => setPage("marketplace")}
             className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 z-10"
-            style={{ border: "1.5px solid var(--sb-bd)" }}>
+            style={{ border: "1.5px solid var(--sb-bd)", background: "var(--sb-mbg)" }}>
             <ArrowLeft01Icon size={16} color="var(--sb-nav-active)"/>
           </button>
-          <span className="absolute inset-x-0 text-center text-[15px] font-bold text-white pointer-events-none">Shopping cart</span>
+          <span className="absolute inset-x-0 text-center text-[16px] font-bold text-white pointer-events-none">Shopping cart</span>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-6">
-        {/* Items */}
-        <div style={{ background: "var(--sb-mbg)" }}>
-          {items.map((item, idx) => (
-            <div key={item.id} className="px-4">
-              <ItemRow item={item}/>
-              {idx < items.length - 1 && <div style={{ height: 1, background: "var(--sb-mbd)" }}/>}
-            </div>
-          ))}
-          {/* Divider after items */}
-          <div className="mx-4 mt-1" style={{ height: 1, background: "var(--sb-mbd)" }}/>
-        </div>
+      <div className="flex-1 overflow-y-auto pb-8">
+        {/* Items — flat on the pure background, separated by hairline dividers */}
+        {items.map((item, idx) => (
+          <div key={item.id}>
+            <ItemRow item={item}/>
+            {idx < items.length - 1 && <div className="mx-4" style={{ height: 1, background: "var(--sb-mbd)" }}/>}
+          </div>
+        ))}
 
-        {/* Right-aligned summary */}
-        <div className="px-4 pt-4 pb-5">
-          <div className="flex flex-col items-end gap-1.5 mb-4">
-            <p className="text-[14px] font-bold text-white">Summary</p>
-            <div className="flex items-center gap-8">
-              <span className="text-[13px]" style={{ color: "#9ca3af" }}>Subtotal:</span>
-              <span className="text-[13px] font-semibold text-white">$ {subtotal.toFixed(2)}</span>
+        {/* Summary — flat, right-aligned rows with a divider above */}
+        <div className="mx-4 mt-1 mb-4" style={{ height: 1, background: "var(--sb-mbd)" }}/>
+        <div className="px-4">
+          <div className="flex flex-col items-end gap-2">
+            <p className="text-[15px] font-bold text-white">Summary</p>
+            <div className="flex items-center gap-6">
+              <span className="text-[13.5px]" style={{ color: "#9ca3af" }}>Subtotal:</span>
+              <span className="text-[14px] font-bold text-white tabular-nums">$ {subtotal.toFixed(2)}</span>
             </div>
-            <div className="flex items-center gap-8">
-              <span className="text-[13px]" style={{ color: "#9ca3af" }}>Service charge (10%):</span>
-              <span className="text-[13px] font-semibold text-white">$ {serviceCharge.toFixed(2)}</span>
+            <div className="flex items-center gap-6">
+              <span className="text-[13.5px]" style={{ color: "#9ca3af" }}>Service charge (10%):</span>
+              <span className="text-[14px] font-bold text-white tabular-nums">$ {serviceCharge.toFixed(2)}</span>
             </div>
-            <div style={{ height: 1, width: "100%", background: "var(--sb-mbd)", margin: "6px 0" }}/>
-            <div className="flex items-center gap-8">
-              <span className="text-[14px] font-bold text-white">Total:</span>
-              <span className="text-[14px] font-extrabold text-white">$ {total.toFixed(2)}</span>
+            <div className="flex items-center gap-6 pt-0.5">
+              <span className="text-[15px] font-bold text-white">Total:</span>
+              <span className="text-[16px] font-extrabold text-white tabular-nums">$ {total.toFixed(2)}</span>
             </div>
           </div>
+        </div>
 
-          {/* Divider */}
-          <div className="mb-5" style={{ height: 1, background: "var(--sb-mbd)" }}/>
-
-          {/* Checkout button */}
+        {/* Checkout button — slim, flat, rectangular */}
+        <div className="px-4 mt-6">
           <button onClick={() => setCartView("checkout")}
-            className="w-full py-4 rounded-2xl font-extrabold text-[15px] text-white transition-all hover:opacity-90 active:scale-[0.98]"
-            style={{ background: `linear-gradient(90deg, ${P} 0%, #e03d1a 100%)` }}>
-            Checkout ({items.length})
+            className="w-full py-3 rounded-[6px] font-bold text-[14px] text-white transition-all hover:opacity-95 active:scale-[0.99]"
+            style={{ background: P }}>
+            Checkout ( {items.length} )
           </button>
         </div>
       </div>
       {QtyModal}
+      {SuccessModal}
     </div>
   );
 
@@ -3493,22 +3789,20 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
       </div>
 
       <div className="flex-1 overflow-y-auto pb-28">
-        <div className="px-4 pt-5">
-          <h1 className="text-[22px] font-extrabold text-white mb-1">Shopping cart</h1>
-          <p className="text-[13px] mb-4" style={{ color: "#9ca3af" }}>All Items ({items.length})</p>
+        <div className="pt-5">
+          <h1 className="text-[22px] font-extrabold text-white mb-4 px-4">Shopping cart</h1>
 
-          {/* Items card */}
-          <div className="rounded-2xl overflow-hidden mb-1" style={{ background: MCARD, border: `1px solid ${MBD}` }}>
-            {items.map((item, idx) => (
-              <div key={item.id} className="px-4">
-                <ItemRow item={item}/>
-                {idx < items.length - 1 && <div style={{ height: 1, background: MBD }}/>}
-              </div>
-            ))}
-          </div>
+          {/* Items — flat on the pure background, separated by hairline dividers */}
+          {items.map((item, idx) => (
+            <div key={item.id}>
+              <ItemRow item={item}/>
+              {idx < items.length - 1 && <div className="mx-4" style={{ height: 1, background: "var(--sb-mbd)" }}/>}
+            </div>
+          ))}
           {/* Subtle bottom line below items */}
-          <div className="mb-6" style={{ height: 1, background: MBD }}/>
+          <div className="mx-4 mt-1 mb-6" style={{ height: 1, background: "var(--sb-mbd)" }}/>
 
+          <div className="px-4">
           {/* Order Summary section */}
           <h2 className="text-[20px] font-extrabold text-white mb-5">Order Summary</h2>
 
@@ -3558,11 +3852,11 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
               </div>
             </div>
 
-            {/* Pay button */}
+            {/* Pay button — slim, flat, rectangular */}
             <button
               onClick={() => { setSelectedItem(items[0]); setShowQtyModal(true); }}
-              className="w-full py-4 rounded-2xl font-extrabold text-[15px] text-white transition-all hover:opacity-90 active:scale-[0.98] mb-3"
-              style={{ background: insufficient ? "#7c2d12" : `linear-gradient(90deg, ${P} 0%, #e03d1a 100%)` }}>
+              className="w-full py-3 rounded-[6px] font-bold text-[14px] text-white transition-all hover:opacity-90 active:scale-[0.99] mb-3"
+              style={{ background: insufficient ? "#7c2d12" : P }}>
               Pay {total.toFixed(2)}
             </button>
 
@@ -3576,10 +3870,12 @@ function CartPage({ setPage }: { setPage:(p:Page)=>void }) {
               </p>
             )}
           </div>
+          </div>
         </div>
       </div>
 
       {QtyModal}
+      {SuccessModal}
     </div>
   );
 }
@@ -3595,18 +3891,15 @@ const NOTIF_DATA = [
 
 function NotificationsPage({ setPage }: { setPage:(p:Page)=>void }) {
   const BG_NOTIF = "var(--sb-mbg)";
-  // The account's own notifications — no demo fallback.
-  const [notifs, setNotifs] = useState<typeof NOTIF_DATA>(() => readCache<typeof NOTIF_DATA>("sb-notifs") ?? []);
+  // The account's own notifications — cached + de-duplicated via TanStack Query.
   const { loaded, finishLoading } = useLoadGate(550);
-  useEffect(() => {
-    let cancelled = false;
-    fetchNotifications().then((rows: ApiNotification[] | null) => {
-      if (cancelled) return;
-      if (rows) { const mapped = rows.map((r) => ({ id: r.id, type: r.kind, title: r.title, body: r.body ?? "" })); writeCache("sb-notifs", mapped); setNotifs(mapped); }
-      finishLoading();
-    }).catch(() => { if (!cancelled) finishLoading(); });
-    return () => { cancelled = true; };
-  }, []);
+  const { data, isFetched } = useNotificationsQuery();
+  useEffect(() => { if (isFetched) finishLoading(); }, [isFetched, finishLoading]);
+  const notifs = useMemo<typeof NOTIF_DATA>(() => {
+    if (!data) return readCache<typeof NOTIF_DATA>("sb-notifs") ?? [];
+    return data.map((r) => ({ id: r.id, type: r.kind, title: r.title, body: r.body ?? "" }));
+  }, [data]);
+  useEffect(() => { if (notifs.length > 0) writeCache("sb-notifs", notifs); }, [notifs]);
   return (
     <div className="min-h-screen flex flex-col" style={{ background: BG_NOTIF, fontFamily: FONT }}>
       {/* Header — back button only, no title */}
@@ -4122,6 +4415,7 @@ function MerchantPage({ setPage, paid, onPaid, onSubmit }: { setPage:(p:Page)=>v
       quantity: qty,
       status: "pending",
       brand,
+      description: acc.description.trim(),
     });
     await new Promise(r => setTimeout(r, 500)); // let the in-button spinner read
     setDone(true);
@@ -4507,6 +4801,7 @@ interface AdListing {
   quantity: number;
   status: AdStatus;
   brand: BrandKey;
+  description?: string;
 }
 
 const SEED_ADS: AdListing[] = [
@@ -4539,31 +4834,132 @@ function AdsMegaphone() {
   return <div className="mb-6"><EmptyMegaphone/></div>;
 }
 
-function AdCard({ ad }: { ad:AdListing }) {
+type StockCred = { login:string; password:string; email:string; emailPass:string; previewLink:string; notes:string };
+const blankStockCred = (): StockCred => ({ login:"", password:"", email:"", emailPass:"", previewLink:"", notes:"" });
+
+function AdCard({ ad, onChanged }: { ad:AdListing; onChanged:()=>void }) {
   const s = AD_STATUS_META[ad.status];
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [mode, setMode] = useState<"none"|"stock"|"delete">("none");
+  const [creds, setCreds] = useState<StockCred[]>([blankStockCred()]);
+  const [busy, setBusy] = useState(false);
+  useScrollLock(mode !== "none");
+  const outOfStock = ad.quantity <= 0;
+  const lowStock = ad.quantity > 0 && ad.quantity <= 3;
+
+  const updateCred = (i:number, patch:Partial<StockCred>) => setCreds(prev => prev.map((c,idx)=> idx===i ? {...c, ...patch} : c));
+  const submitStock = async () => {
+    const clean = creds.map(c => ({ login:c.login.trim(), password:c.password.trim(), email:c.email.trim(), emailPass:c.emailPass.trim(), previewLink:c.previewLink.trim(), notes:c.notes.trim() }));
+    if (clean.some(c => !c.login || !c.password)) { toast.error("Each account needs a login/username and a password.", { title: "Add stock" }); return; }
+    setBusy(true);
+    const r = await addAdStock(ad.id, clean);
+    setBusy(false);
+    if (!r.ok) { toast.error(r.error ?? "Could not add stock.", { title: "Add stock" }); return; }
+    toast.success(`Added ${clean.length} account${clean.length>1?"s":""} to "${ad.title}".`, { title: "Stock updated" });
+    setMode("none"); setCreds([blankStockCred()]); onChanged();
+  };
+  const submitDelete = async () => {
+    setBusy(true);
+    const r = await deleteAd(ad.id);
+    setBusy(false);
+    if (!r.ok) { toast.error(r.error ?? "Could not delete ad.", { title: "Delete ad" }); return; }
+    toast.success("Ad deleted.", { title: "Deleted" });
+    setMode("none"); onChanged();
+  };
+
   return (
-    <div className="rounded-2xl p-4 flex items-center gap-3.5 transition-all hover:border-white/20" style={{ background:MCARD, border:`1px solid ${MBD}` }}>
+    <div className="relative rounded-2xl p-4 flex items-center gap-3.5 transition-all hover:border-white/20" style={{ background:MCARD, border:`1px solid ${MBD}` }}>
       <BrandIcon brand={ad.brand} size={52}/>
       <div className="flex-1 min-w-0">
         <p className="text-white font-bold text-[14px] leading-snug line-clamp-1">{ad.title}</p>
-        <p className="text-gray-400 text-[12px] mt-1">{ad.platform || ad.category} • {ad.quantity} available</p>
-        <div className="flex items-center gap-1.5 mt-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1.5">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold" style={{ background:s.bg, color:s.color }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background:s.dot }}/> {s.label}
           </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold"
+            style={ outOfStock ? { background:"rgba(239,68,68,0.14)", color:"#f87171" } : lowStock ? { background:"rgba(245,158,11,0.14)", color:"#fbbf24" } : { background:"rgba(255,255,255,0.06)", color:"#9ca3af" } }>
+            {outOfStock ? "Out of stock" : `${ad.quantity} in stock`}
+          </span>
+          <span className="text-[11px] text-gray-500">{ad.platform || ad.category}</span>
         </div>
       </div>
-      <div className="flex flex-col items-end gap-2 shrink-0">
-        <span className="text-white font-extrabold text-[16px]">${ad.price.toFixed(2)}</span>
-        <button className="text-gray-400 hover:text-white transition-colors p-1">
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-white font-extrabold text-[16px]" style={{ fontVariantNumeric:"tabular-nums" }}>${ad.price.toFixed(2)}</span>
+        <button onClick={()=>setMenuOpen(v=>!v)} aria-label="Ad options" className="grid h-8 w-8 place-items-center text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/[0.06]">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
         </button>
       </div>
+
+      {/* Three-dots dropdown */}
+      {menuOpen && (
+        <>
+          <button aria-label="Close menu" className="fixed inset-0 z-[70] cursor-default" onClick={()=>setMenuOpen(false)}/>
+          <div className="absolute right-3 top-12 z-[80] w-44 overflow-hidden rounded-xl py-1 shadow-[0_16px_40px_rgba(0,0,0,.4)]" style={{ background:"var(--sb-mcard)", border:`1px solid ${MBD}` }}>
+            <button onClick={()=>{ setMenuOpen(false); setMode("stock"); setCreds([blankStockCred()]); }} className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] font-semibold text-white transition hover:bg-white/[0.06]">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>Add stock
+            </button>
+            <button onClick={()=>{ setMenuOpen(false); setMode("delete"); }} className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] font-semibold text-[#f87171] transition hover:bg-white/[0.06]">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>Delete permanently
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Add-stock / delete modal (centered, portalled to escape any transformed ancestor) */}
+      {mode !== "none" && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-5" style={{ background:"rgba(0,0,0,0.55)", backdropFilter:"blur(2px)" }} onClick={()=>!busy && setMode("none")}>
+          <div className={`${mode === "stock" ? "w-[440px]" : "w-[360px]"} flex max-h-[88vh] max-w-full flex-col rounded-2xl`} style={{ background:"var(--sb-mcard)", border:`1px solid ${MBD}`, fontFamily:FONT, animation:"sbPopIn .25s cubic-bezier(.2,.9,.3,1.1) both" }} onClick={(e)=>e.stopPropagation()}>
+            {mode === "stock" ? (
+              <>
+                <div className="px-5 pt-5">
+                  <h3 className="text-[17px] font-extrabold text-white">Add stock — account details</h3>
+                  <p className="mt-1 text-[13px] text-gray-400">Each account you add is one unit of stock, auto-delivered to the buyer. <span className="text-gray-300">{ad.quantity} in stock now.</span></p>
+                </div>
+                <div className="mt-3 flex-1 space-y-3 overflow-y-auto px-5" style={{ scrollbarWidth:"thin" }}>
+                  {creds.map((c, i) => (
+                    <div key={i} className="rounded-2xl p-3.5" style={{ background:MBG, border:`1px solid ${MBD}` }}>
+                      <div className="mb-2.5 flex items-center justify-between">
+                        <span className="text-[12px] font-bold uppercase tracking-wider" style={{ color:P }}>Account {i+1}</span>
+                        {creds.length > 1 && <button onClick={()=>setCreds(prev => prev.filter((_,idx)=>idx!==i))} className="text-[11px] font-bold text-[#f87171] hover:opacity-80">Remove</button>}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={c.login} onChange={e=>updateCred(i,{login:e.target.value})} placeholder="Login / username *" className="h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                        <input value={c.password} onChange={e=>updateCred(i,{password:e.target.value})} placeholder="Password *" className="h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                        <input value={c.email} onChange={e=>updateCred(i,{email:e.target.value})} placeholder="Email (optional)" className="h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                        <input value={c.emailPass} onChange={e=>updateCred(i,{emailPass:e.target.value})} placeholder="Email password (optional)" className="h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                        <input value={c.previewLink} onChange={e=>updateCred(i,{previewLink:e.target.value})} placeholder="Preview link (optional)" className="col-span-2 h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                        <input value={c.notes} onChange={e=>updateCred(i,{notes:e.target.value})} placeholder="Notes / instructions (optional)" className="col-span-2 h-10 rounded-lg px-3 text-[13px] text-white outline-none placeholder:text-gray-500" style={{ background:"var(--sb-fill)", border:`1px solid ${MBD}` }}/>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={()=>setCreds(prev => [...prev, blankStockCred()])} className="flex w-full items-center justify-center gap-1.5 rounded-2xl py-2.5 text-[13px] font-bold transition hover:bg-white/[0.04]" style={{ border:`1px dashed ${MBD}`, color:P }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>Add another account
+                  </button>
+                </div>
+                <div className="flex gap-3 p-5 pt-4">
+                  <button onClick={()=>setMode("none")} disabled={busy} className="flex-1 h-11 rounded-full text-[14px] font-bold text-white transition hover:bg-white/[0.06]" style={{ border:`1px solid ${MBD}` }}>Cancel</button>
+                  <button onClick={submitStock} disabled={busy} className="flex-1 h-11 rounded-full text-[14px] font-bold text-white transition hover:opacity-90 disabled:opacity-70 inline-flex items-center justify-center gap-2" style={{ background:P }}>{busy && <Spinner size={16}/>}Add {creds.length} to stock</button>
+                </div>
+              </>
+            ) : (
+              <div className="p-5">
+                <h3 className="text-[17px] font-extrabold text-white">Delete this ad?</h3>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-gray-400">&ldquo;{ad.title}&rdquo; will be permanently removed from the marketplace and your storefront. This cannot be undone.</p>
+                <div className="mt-5 flex gap-3">
+                  <button onClick={()=>setMode("none")} disabled={busy} className="flex-1 h-11 rounded-full text-[14px] font-bold text-white transition hover:bg-white/[0.06]" style={{ border:`1px solid ${MBD}` }}>Cancel</button>
+                  <button onClick={submitDelete} disabled={busy} className="flex-1 h-11 rounded-full text-[14px] font-bold text-white transition hover:opacity-90 disabled:opacity-70 inline-flex items-center justify-center gap-2" style={{ background:"#dc2626" }}>{busy && <Spinner size={16}/>}Delete</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
 
-function MyAdsPage({ setPage, ads, seller, loaded }: { setPage:(p:Page)=>void; ads:AdListing[]; seller:boolean; loaded?:boolean }) {
+function MyAdsPage({ setPage, ads, seller, loaded, onChanged }: { setPage:(p:Page)=>void; ads:AdListing[]; seller:boolean; loaded?:boolean; onChanged:()=>void }) {
   if (!seller) {
     return (
       <div className="min-h-screen flex flex-col" style={{ background: MBG, fontFamily: FONT }}>
@@ -4584,10 +4980,10 @@ function MyAdsPage({ setPage, ads, seller, loaded }: { setPage:(p:Page)=>void; a
       </div>
     );
   }
-  return <MyAdsPageInner setPage={setPage} ads={ads} loaded={loaded !== false}/>;
+  return <MyAdsPageInner setPage={setPage} ads={ads} loaded={loaded !== false} onChanged={onChanged}/>;
 }
 
-function MyAdsPageInner({ setPage, ads, loaded }: { setPage:(p:Page)=>void; ads:AdListing[]; loaded:boolean }) {
+function MyAdsPageInner({ setPage, ads, loaded, onChanged }: { setPage:(p:Page)=>void; ads:AdListing[]; loaded:boolean; onChanged:()=>void }) {
   const [tab, setTab] = useState<AdStatus|"all">("all");
   const filtered = tab === "all" ? ads : ads.filter(a => a.status === tab);
 
@@ -4611,16 +5007,16 @@ function MyAdsPageInner({ setPage, ads, loaded }: { setPage:(p:Page)=>void; ads:
       {/* Panel */}
       <div className="px-5 md:px-10 pb-10 flex-1">
         <div className="rounded-[26px] overflow-hidden" style={{ background:MCARD, border:`1px solid ${MBD}`, minHeight:520 }}>
-          {/* Tabs — spread evenly across the full width */}
-          <div className="flex items-stretch overflow-x-auto" style={{ borderBottom:`1px solid ${MBD}`, scrollbarWidth:"none" }}>
+          {/* Tabs — horizontally scrollable so all 5 filters are reachable on any width */}
+          <div className="flex items-stretch overflow-x-auto" style={{ borderBottom:`1px solid ${MBD}`, scrollbarWidth:"none", WebkitOverflowScrolling:"touch" }}>
             {AD_TABS.map(t => {
               const active = tab === t.key;
               const count = t.key === "all" ? ads.length : ads.filter(a=>a.status===t.key).length;
               return (
                 <button key={t.key} onClick={()=>setTab(t.key)}
-                  className="relative flex-1 flex items-center justify-center py-4 text-[14px] font-semibold whitespace-nowrap transition-colors"
+                  className="relative flex shrink-0 items-center justify-center gap-1.5 px-6 py-4 text-[14px] font-semibold whitespace-nowrap transition-colors"
                   style={{ color: active ? P : "#9ca3af" }}>
-                  {t.label}{count>0 && <span className="ml-1.5 text-[11px]" style={{ color: active ? P : "#6b7280" }}>({count})</span>}
+                  {t.label}{count>0 && <span className="text-[11px]" style={{ color: active ? P : "#6b7280" }}>({count})</span>}
                   {active && <span className="absolute left-1/2 -translate-x-1/2 bottom-0 h-[2.5px] rounded-full" style={{ background:P, width:"70%" }}/>}
                 </button>
               );
@@ -4649,7 +5045,7 @@ function MyAdsPageInner({ setPage, ads, loaded }: { setPage:(p:Page)=>void; ads:
             </div>
           ) : (
             <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filtered.map(ad => <AdCard key={ad.id} ad={ad}/>)}
+              {filtered.map(ad => <AdCard key={ad.id} ad={ad} onChanged={onChanged}/>)}
             </div>
           )}
         </div>
@@ -4689,7 +5085,7 @@ const PAGE_PATHS: Record<Page, string> = {
   "become-merchant": "/become-a-merchant",
   ads: "/seller/ads", purchase: "/my-purchase", order: "/order-details",
   referral: "/referral", settings: "/settings", merchants: "/top-merchants",
-  store: "/store",
+  store: "/store", admin: "/admin",
 };
 // Signed-in pages that show the persistent bottom tab bar (mobile). Excludes
 // the marketplace (renders its own), the public/auth pages, the order chat
@@ -4705,6 +5101,7 @@ const pathToPage = (path: string): Page => {
   if (path === "/signup") return "signup";
   if (path === "/account/wallet" || path === "/seller/wallet") return "wallet";
   if (path === "/account/settings" || path === "/seller/settings" || path === "/settings") return "settings";
+  if (path === "/account/profile" || path === "/seller/profile" || path === "/profile") return "user-profile";
   if (path === "/seller/my-orders") return "purchase";
   if (path === "/seller/ads" || path === "/ads") return "ads"; // /ads kept as a legacy alias
   if (path.startsWith("/order-details") || path.startsWith("/seller/order-details")) return "order";
@@ -4737,7 +5134,14 @@ export default function App() {
   const setPage = (p: Page) => {
     setPageState(p);
     try {
-      window.history.pushState({ page: p }, "", PAGE_PATHS[p]);
+      // The profile page owns a role-based URL — push it directly so the profile
+      // icon never lands the user on the generic /profile.
+      let url: string = PAGE_PATHS[p];
+      if (p === "user-profile") {
+        const prof = readCache<{ is_seller?: boolean }>("sb-profile");
+        url = prof?.is_seller ? "/seller/profile" : "/account/profile";
+      }
+      window.history.pushState({ page: p }, "", url);
       window.scrollTo(0, 0);
     } catch { /* ignore */ }
   };
@@ -4786,31 +5190,33 @@ export default function App() {
   // A seller's own live ads — no demo seed. New sellers see a real empty state.
   const [myAds, setMyAds] = useState<AdListing[]>(() => readCache<AdListing[]>("sb-ads") ?? []);
   const { loaded: myAdsLoaded, finishLoading: finishAds } = useLoadGate(600);
+  // Re-fetch the seller's live ads — called on mount and after any add-stock /
+  // delete mutation so the My Ads list always reflects the real database.
+  const loadAds = () => fetchAds().then((rows) => {
+    if (rows) {
+      const mapped: AdListing[] = rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        category: r.category,
+        platform: r.brand.charAt(0).toUpperCase() + r.brand.slice(1),
+        price: Number(r.price) || 0,
+        quantity: r.quantity,
+        status: (["active","pending","denied","removed"].includes(r.status) ? r.status : "pending") as AdStatus,
+        brand: (r.brand in BRAND_LOGOS ? r.brand : "vpn") as BrandKey,
+        description: (r as { description?: string }).description ?? "",
+      }));
+      writeCache("sb-ads", mapped);
+      setMyAds(mapped);
+    }
+  });
   useEffect(() => {
     let cancelled = false;
-    fetchAds().then((rows) => {
-      if (cancelled) return;
-      if (rows) {
-        const mapped: AdListing[] = rows.map((r) => ({
-          id: r.id,
-          title: r.title,
-          category: r.category,
-          platform: r.brand.charAt(0).toUpperCase() + r.brand.slice(1),
-          price: Number(r.price) || 0,
-          quantity: r.quantity,
-          status: (["active","pending","denied","removed"].includes(r.status) ? r.status : "pending") as AdStatus,
-          brand: (r.brand in BRAND_LOGOS ? r.brand : "vpn") as BrandKey,
-        }));
-        writeCache("sb-ads", mapped);
-        setMyAds(mapped);
-      }
-      finishAds();
-    }).catch(() => { if (!cancelled) finishAds(); });
+    loadAds().then(() => { if (!cancelled) finishAds(); }).catch(() => { if (!cancelled) finishAds(); });
     return () => { cancelled = true; };
   }, []);
   const addAd = (ad:AdListing) => {
     setMyAds(prev => { const next = [ad, ...prev]; writeCache("sb-ads", next); return next; });
-    createAd({ title: ad.title, brand: ad.brand, category: ad.category, price: ad.price, quantity: ad.quantity });
+    createAd({ title: ad.title, brand: ad.brand, category: ad.category, price: ad.price, quantity: ad.quantity, description: ad.description ?? "" });
   };
   // App-wide theme — persisted, applied via the `theme-light` class on <html>
   const [dark, setDark] = useState(() => {
@@ -4849,7 +5255,8 @@ export default function App() {
       {page==="referral"      && <ReferralPage      setPage={setPage}/>}
       {page==="merchants"     && <TopMerchantsPage  setPage={setPage}/>}
       {page==="store"         && <SellerStorePage   setPage={setPage}/>}
-      {page==="ads"           && <MyAdsPage         setPage={setPage} ads={myAds} seller={merchantPaid} loaded={myAdsLoaded}/>}
+      {page==="admin"         && <AdminPage         setPage={setPage}/>}
+      {page==="ads"           && <MyAdsPage         setPage={setPage} ads={myAds} seller={merchantPaid} loaded={myAdsLoaded} onChanged={loadAds}/>}
       {page==="become-merchant" && <BecomeMerchantPage setPage={setPage}/>}
       {page==="merchant"      && <MerchantPage      setPage={setPage} paid={merchantPaid} onPaid={confirmSellerPayment} onSubmit={addAd}/>}
       {/* Persistent bottom tab bar — shown on every signed-in app page for a

@@ -1,4 +1,4 @@
-import { supabase, getSessionEmail, json, dbMissing, unauthorized } from "@/server/api";
+import { supabase, getSessionEmail, isAdmin, json, dbMissing, unauthorized } from "@/server/api";
 
 export const dynamic = "force-dynamic";
 
@@ -9,5 +9,7 @@ export async function GET() {
   const { data, error } = await supabase.from("profiles").select("*").eq("email", email).maybeSingle();
   if (error) return json({ error: error.message }, 500);
   if (!data) return json({ error: "Profile not found." }, 404);
-  return json(data);
+  // Admin status is computed server-side from the configured admin list — never
+  // stored on the profile, so it can't be self-granted.
+  return json({ ...data, is_admin: isAdmin(email) });
 }

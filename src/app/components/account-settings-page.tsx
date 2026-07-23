@@ -81,21 +81,32 @@ function DobField({ value, onChange }: { value: string; onChange: (v: string) =>
   const [open, setOpen] = useState(false);
   useScrollLock(open); // lock the page behind the centered calendar modal
   const parsed = parseDob(value);
-  const thisYear = new Date().getFullYear();
+  const today = new Date();
+  const thisYear = today.getFullYear();
+  // Enforce a real age range: must be at least 18, at most 100. The latest
+  // selectable date of birth is exactly 18 years ago today.
+  const MIN_AGE = 18, MAX_AGE = 100;
+  const maxYear = thisYear - MIN_AGE;
+  const minYear = thisYear - MAX_AGE;
+  const maxDobTime = new Date(maxYear, today.getMonth(), today.getDate()).getTime();
   const [viewM, setViewM] = useState(parsed?.m ?? 0);
-  const [viewY, setViewY] = useState(parsed?.y ?? 2000);
+  const [viewY, setViewY] = useState(parsed?.y ?? maxYear);
   useEffect(() => {
     const p = parseDob(value);
     if (p) { setViewM(p.m); setViewY(p.y); }
   }, [value]);
 
   const years: number[] = [];
-  for (let y = thisYear; y >= 1940; y -= 1) years.push(y);
+  for (let y = maxYear; y >= minYear; y -= 1) years.push(y);
   const firstDay = new Date(viewY, viewM, 1).getDay();
   const daysInMonth = new Date(viewY, viewM + 1, 0).getDate();
   const cells: (number | null)[] = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const tooYoung = (day: number) => new Date(viewY, viewM, day).getTime() > maxDobTime; // under 18
 
-  const pick = (day: number) => { onChange(`${pad2(day)}/${pad2(viewM + 1)}/${viewY}`); setOpen(false); };
+  const pick = (day: number) => {
+    if (tooYoung(day)) return; // block dates that make the user under 18
+    onChange(`${pad2(day)}/${pad2(viewM + 1)}/${viewY}`); setOpen(false);
+  };
   const prevM = () => { if (viewM === 0) { setViewM(11); setViewY((y) => y - 1); } else setViewM((m) => m - 1); };
   const nextM = () => { if (viewM === 11) { setViewM(0); setViewY((y) => y + 1); } else setViewM((m) => m + 1); };
   const selHex = "#f04e23";
@@ -137,17 +148,22 @@ function DobField({ value, onChange }: { value: string; onChange: (v: string) =>
               {cells.map((d, i) => {
                 if (d === null) return <span key={i} className="aspect-square"/>;
                 const isSel = !!parsed && parsed.d === d && parsed.m === viewM && parsed.y === viewY;
+                const disabled = tooYoung(d);
                 return (
-                  <button type="button" key={i} onClick={() => pick(d)}
-                    className="mx-auto flex aspect-square w-[34px] items-center justify-center rounded-full text-[13px] font-semibold transition"
-                    style={isSel ? { background: selHex, color: "#fff" } : { color: "var(--sb-nav-active)" }}
-                    onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = "var(--sb-chip)"; }}
-                    onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
+                  <button type="button" key={i} onClick={() => pick(d)} disabled={disabled} aria-disabled={disabled}
+                    className="mx-auto flex aspect-square w-[34px] items-center justify-center rounded-full text-[13px] font-semibold transition disabled:cursor-not-allowed"
+                    style={isSel ? { background: selHex, color: "#fff" } : { color: disabled ? "var(--sb-chip-text)" : "var(--sb-nav-active)", opacity: disabled ? 0.35 : 1 }}
+                    onMouseEnter={(e) => { if (!isSel && !disabled) e.currentTarget.style.background = "var(--sb-chip)"; }}
+                    onMouseLeave={(e) => { if (!isSel && !disabled) e.currentTarget.style.background = "transparent"; }}>
                     {d}
                   </button>
                 );
               })}
             </div>
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              You must be at least 18 years old
+            </p>
           </div>
         </div>,
         document.body,
@@ -171,6 +187,8 @@ function ProfileSettings() {
   const [city, setCity] = useState(profile.city ?? "");
   const [address, setAddress] = useState(profile.address ?? "");
   const [dob, setDob] = useState(profile.dob ?? "");
+  const [bio, setBio] = useState(profile.bio ?? "");
+  const isSeller = Boolean(profile.is_seller);
   const [saving, setSaving] = useState(false);
   // Cascading geo options: states for the chosen country, cities for the chosen state.
   const [states, setStates] = useState<ApiState[]>([]);
@@ -178,8 +196,8 @@ function ProfileSettings() {
   useEffect(() => {
     // Re-seed once the real profile resolves.
     setIso(profile.country ?? ""); setState(profile.state ?? ""); setCity(profile.city ?? "");
-    setAddress(profile.address ?? ""); setDob(profile.dob ?? "");
-  }, [profile.country, profile.state, profile.city, profile.address, profile.dob]);
+    setAddress(profile.address ?? ""); setDob(profile.dob ?? ""); setBio(profile.bio ?? "");
+  }, [profile.country, profile.state, profile.city, profile.address, profile.dob, profile.bio]);
 
   // Load the states for the selected country; map a saved state name back to its code.
   useEffect(() => {
@@ -234,7 +252,7 @@ function ProfileSettings() {
   const save = async () => {
     if (saving) return;
     setSaving(true);
-    const result = await updateProfile({ country: iso, state, city, address, dob });
+    const result = await updateProfile({ country: iso, state, city, address, dob, bio });
     setSaving(false);
     if (!result.ok) { toast.error(result.error ?? "Could not save.", { title: "Not saved" }); return; }
     await refreshProfile();
@@ -291,6 +309,16 @@ function ProfileSettings() {
             options={cities.map((c) => ({ value: c, label: c }))}/>
           <Field label="User address" value={address} onChange={setAddress} placeholder="Type your address here" />
           <DobField value={dob} onChange={setDob} />
+          {isSeller && (
+            <div>
+              <label className="mb-1.5 block text-[13px] font-semibold" style={{ color: "var(--sb-nav-active)" }}>Store bio</label>
+              <textarea value={bio} onChange={(e) => setBio(e.target.value.slice(0, 500))} placeholder="Tell buyers about your store — what you sell, delivery time, trust…" rows={4}
+                className="w-full resize-none rounded-xl px-3.5 py-3 text-[14px] font-medium outline-none transition placeholder:text-[#90a0b5]"
+                style={{ background: "var(--sb-fill)", border: "1px solid var(--sb-mbd)", color: "var(--sb-nav-active)", fontFamily: FONT }}
+                onFocus={(e) => e.currentTarget.style.borderColor = P} onBlur={(e) => e.currentTarget.style.borderColor = "var(--sb-mbd)"}/>
+              <p className="mt-1 text-right text-[11px]" style={{ color: "var(--sb-chip-text)" }}>{bio.length}/500 — shows on your storefront &amp; profile</p>
+            </div>
+          )}
         </div>
       </section>
       <div className="flex justify-end pt-6">

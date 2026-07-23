@@ -55,7 +55,7 @@ export async function GET(_req: Request, { params }: { params: { merchantId: str
   let sales = seeded?.sales ?? 0;
   if (email) {
     const { count } = await supabase.from("purchases").select("id", { count: "exact", head: true })
-      .eq("seller_email", email).eq("status", "Completed");
+      .eq("seller_email", email).eq("status", "completed");
     sales = count ?? 0;
   }
 

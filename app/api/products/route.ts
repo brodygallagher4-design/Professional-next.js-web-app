@@ -31,6 +31,7 @@ export async function GET() {
     available: a.quantity ?? 1,
     badge: "flash",
     preview_url: null,
+    description: a.description ?? null,
   }));
   return json(products);
 }

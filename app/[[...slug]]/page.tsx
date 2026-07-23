@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { QueryProvider } from "@/app/lib/query";
 
 // The whole app is a client-rendered SPA with its own history-based routing.
 // Load it client-only (ssr: false) so its window/localStorage access on first
@@ -13,5 +14,9 @@ const App = dynamic(() => import("@/app/App"), {
 });
 
 export default function CatchAllPage() {
-  return <App />;
+  return (
+    <QueryProvider>
+      <App />
+    </QueryProvider>
+  );
 }

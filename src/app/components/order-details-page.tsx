@@ -3,11 +3,13 @@
 import { useState, useEffect, useRef } from "react";
 import {
   P, MBG, MCARD, MBD, FONT,
-  DesktopTopNav, AppMobileHeader, getCurrentOrder, useProfile,
+  DesktopTopNav, AppMobileHeader, getCurrentOrder, useProfile, useOrderCountdown,
 } from "../shared";
 import type { Page } from "../shared";
 import { OrderPreviewModal, SellerOrderModal, type Purchase } from "./purchase-page";
-import { fetchOrderMessages, sendOrderMessage, fetchPurchases } from "../lib/api";
+import { fetchOrderMessages, sendOrderMessage, fetchPurchases, confirmOrder, cancelOrder, markDelivered } from "../lib/api";
+import { useInvalidate, qk } from "../lib/query";
+import { toast } from "../toast";
 
 // Safe clipboard copy — falls back to execCommand when the Clipboard API is
 // blocked by the iframe permissions policy (never throws).
@@ -91,7 +93,8 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
         id: hit.id, buyer: hit.buyer ?? undefined, brand: "gmail", glyph: hit.glyph,
         title: hit.title, desc: hit.description ?? "", cardSubtitle: hit.description ?? "",
         seller: hit.seller, sellerColor: "#6d28d9", price: Number(hit.price) || 0,
-        time: "", status: hit.status === "processing" ? "processing" : "completed",
+        time: "", status: (["pending","completed","cancelled","processing"].includes(String(hit.status)) ? hit.status : "completed") as Purchase["status"],
+        createdAt: hit.created_at, delivered: Boolean(hit.delivered),
         productType: hit.product_type, username: hit.username ?? "", password: hit.password ?? "",
         note: hit.note ?? "", noteTime: hit.note_time ?? "",
       });
@@ -102,6 +105,45 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
   const order = resolvedOrder;
   const counterpartName = order ? (isSeller ? (order.buyer || "Customer") : order.seller) : "";
   const counterpartRole = isSeller ? "Buyer" : "Seller";
+  // Live escrow countdown + buyer actions (confirm releases funds; cancel refunds
+  // once the window has passed — the server re-checks both, this is just the UI).
+  const { hasDeadline, expired, hms } = useOrderCountdown(order?.createdAt);
+  const isPending = order?.status === "pending" || order?.status === "processing";
+  const isBuyer = !isSeller;
+  const [acting, setActing] = useState<"confirm" | "cancel" | "deliver" | null>(null);
+  const invalidate = useInvalidate();
+  const refreshOrderCaches = () => invalidate([[...qk.purchases("buyer")], [...qk.purchases("seller")], [...qk.wallet]]);
+  const doDeliver = async () => {
+    if (!order || acting) return;
+    setActing("deliver");
+    const r = await markDelivered(order.id);
+    setActing(null);
+    if (!r.ok) { toast.error(r.error ?? "Could not mark as delivered.", { title: "Order" }); return; }
+    setResolvedOrder((o) => (o ? { ...o, delivered: true } : o));
+    toast.success("Marked as delivered — the buyer has been asked to confirm.", { title: "Delivered" });
+  };
+  const doConfirm = async () => {
+    if (!order || acting) return;
+    setActing("confirm");
+    const r = await confirmOrder(order.id);
+    setActing(null);
+    if (!r.ok) { toast.error(r.error ?? "Could not confirm the order.", { title: "Order" }); return; }
+    setResolvedOrder((o) => (o ? { ...o, status: "completed" } : o));
+    try { sessionStorage.removeItem("sb-purchases"); sessionStorage.removeItem("sb-wallet-tx"); } catch { /* ignore */ }
+    refreshOrderCaches();
+    toast.success("Order completed — funds released to the seller.", { title: "Confirmed" });
+  };
+  const doCancel = async () => {
+    if (!order || acting) return;
+    setActing("cancel");
+    const r = await cancelOrder(order.id);
+    setActing(null);
+    if (!r.ok) { toast.error(r.error ?? "Could not cancel the order.", { title: "Order" }); return; }
+    setResolvedOrder((o) => (o ? { ...o, status: "cancelled" } : o));
+    try { sessionStorage.removeItem("sb-purchases"); sessionStorage.removeItem("sb-wallet-tx"); } catch { /* ignore */ }
+    refreshOrderCaches();
+    toast.success("Order cancelled — you've been refunded.", { title: "Refunded" });
+  };
   // Premium role URL: /seller/order-details/<id> vs /order-details/<id>
   useEffect(() => {
     if (!order) return;
@@ -196,9 +238,37 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
               <span className="flex items-center gap-1 text-[12px]" style={{ color: "#16a34a" }}><span className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }}/> Active</span>
               <span className="text-[12px]" style={{ color: "var(--sb-chip-text)" }}>Offline</span>
             </div>
-            <p className="text-[12px] mt-1.5" style={{ color: "var(--sb-chip-text)" }}>Waiting For Action</p>
+            <p className="text-[12px] mt-1.5" style={{ color: "var(--sb-chip-text)" }}>
+              {order.status === "completed" ? "Completed" : order.status === "cancelled" ? "Cancelled" : "Waiting For Action"}
+            </p>
           </div>
-          <button onClick={() => setPage("support")} className="px-4 py-1.5 rounded-full font-bold text-[13px] text-white shrink-0 transition-all hover:opacity-90 active:scale-95" style={{ background: "#e02d2d" }}>Report</button>
+          <div className="flex items-center gap-2 shrink-0">
+            {isSeller && isPending && !order.delivered && (
+              <button onClick={doDeliver} disabled={acting !== null}
+                className="px-4 py-1.5 rounded-full font-bold text-[13px] text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-60" style={{ background: "#16a34a" }}>
+                {acting === "deliver" ? "…" : "Mark Delivered"}
+              </button>
+            )}
+            {isSeller && isPending && order.delivered && (
+              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full font-bold text-[12.5px]" style={{ background: "rgba(22,163,74,0.12)", color: "#16a34a" }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Delivered
+              </span>
+            )}
+            {isBuyer && isPending && !expired && (
+              <button onClick={doConfirm} disabled={acting !== null}
+                className="px-4 py-1.5 rounded-full font-bold text-[13px] text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-60" style={{ background: "#16a34a" }}>
+                {acting === "confirm" ? "…" : "Confirm"}
+              </button>
+            )}
+            {isBuyer && isPending && expired && (
+              <button onClick={doCancel} disabled={acting !== null}
+                className="px-4 py-1.5 rounded-full font-bold text-[13px] transition-all hover:opacity-90 active:scale-95 disabled:opacity-60"
+                style={{ background: "transparent", color: "#e02d2d", border: "1.5px solid #e02d2d" }}>
+                {acting === "cancel" ? "…" : "Cancel Order"}
+              </button>
+            )}
+            <button onClick={() => setPage("support")} className="px-4 py-1.5 rounded-full font-bold text-[13px] text-white transition-all hover:opacity-90 active:scale-95" style={{ background: "#e02d2d" }}>Report</button>
+          </div>
         </div>
 
         {/* ── Escrow banner */}
@@ -206,7 +276,17 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-white shrink-0 mt-0.5"><path d="M12 22s8-3.6 8-10V5.4L12 2 4 5.4V12c0 6.4 8 10 8 10Z"/><path d="m9 11.7 2.1 2.1L15.3 9.5"/></svg>
           <div>
             <p className="text-white font-bold text-[14px]">Escrow Protection</p>
-            <p className="text-[13px] mt-0.5" style={{ color: "var(--sb-chip-text)" }}>Funds are securely held in escrow until the order is completed.</p>
+            <p className="text-[13px] mt-0.5" style={{ color: "var(--sb-chip-text)" }}>
+              {order.status === "cancelled"
+                ? "This order was cancelled and the buyer has been refunded."
+                : order.status === "completed"
+                  ? "Order complete — the escrowed funds have been released to the seller."
+                  : isSeller
+                    ? `You'll receive $${(order.price * 0.9).toFixed(2)} once the buyer confirms. Deliver the account in the chat, then mark it delivered.`
+                    : order.delivered
+                      ? "The seller marked this delivered — review it and confirm to release the funds, or report a problem."
+                      : "Funds are securely held in escrow until you confirm the order is delivered."}
+            </p>
           </div>
         </div>
 
@@ -216,9 +296,17 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold text-[14.5px] leading-snug truncate">{order.title}</p>
             <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] font-semibold" style={{ background: "rgba(34,197,94,0.13)", color: "#16a34a" }}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Completed
-              </span>
+              {order.status === "cancelled" ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] font-semibold" style={{ background: "rgba(224,45,45,0.13)", color: "#e02d2d" }}>Cancelled</span>
+              ) : isPending ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] font-semibold" style={{ background: "rgba(217,119,6,0.14)", color: "#d97706" }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#d97706" }}/> Pending
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11.5px] font-semibold" style={{ background: "rgba(34,197,94,0.13)", color: "#16a34a" }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Completed
+                </span>
+              )}
               <span className="text-white font-extrabold text-[14px]">$ {order.price.toFixed(2)}</span>
               <span className="flex items-center gap-1 text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}><span className="w-1 h-1 rounded-full" style={{ background: "var(--sb-chip-text)" }}/> {order.productType}</span>
             </div>
@@ -234,7 +322,15 @@ export function OrderDetailsPage({ setPage }: { setPage: (p: Page) => void }) {
             <button onClick={() => setShowLogins(true)} className="flex items-center gap-0.5 px-3 py-2 rounded-[12px] text-[13px] font-semibold leading-tight transition hover:opacity-80 active:scale-95" style={{ background: "rgba(240,78,35,0.10)", color: P }}>
               {isSeller ? "View Order" : "View Logins"} <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M9 18l6-6-6-6"/></svg>
             </button>
-            <span className="text-[13px] font-semibold leading-snug" style={{ color: "#e02d2d" }}>Time expired</span>
+            {isPending && hasDeadline ? (
+              expired
+                ? <span className="text-[12.5px] font-bold leading-snug" style={{ color: "#e02d2d" }}>Window ended</span>
+                : <span className="rounded-[10px] px-2.5 py-1.5 text-[14px] font-extrabold tabular-nums leading-none" style={{ background: "rgba(224,45,45,0.10)", color: "#e02d2d" }}>{hms}</span>
+            ) : order.status === "cancelled" ? (
+              <span className="text-[12.5px] font-semibold leading-snug" style={{ color: "#e02d2d" }}>Refunded</span>
+            ) : (
+              <span className="text-[12.5px] font-semibold leading-snug" style={{ color: "#16a34a" }}>Completed</span>
+            )}
           </div>
         </div>
 

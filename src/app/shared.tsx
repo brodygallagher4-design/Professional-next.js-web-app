@@ -56,7 +56,7 @@ export const getStoreMerchant = () => _storeMerchant;
 // ─── ACCOUNT PROFILE ───────────────────────────────────────────────────────────
 // Loaded once from the backend; cached so every surface (drawer, top-nav
 // dropdown, profile page) shows the same real identity.
-export interface Profile { full_name: string; email: string; joined?: string; is_seller?: boolean; merchant_id?: string; avatar_url?: string; phone?: string; country?: string; address?: string; dob?: string; state?: string; city?: string; }
+export interface Profile { full_name: string; email: string; joined?: string; is_seller?: boolean; is_admin?: boolean; merchant_id?: string; avatar_url?: string; phone?: string; country?: string; address?: string; dob?: string; state?: string; city?: string; bio?: string; }
 const DEFAULT_PROFILE: Profile = { full_name: "My Account", email: "" };
 let _profileCache: Profile | null = null;
 // Every mounted useProfile() subscribes, so a single authoritative update (from
@@ -65,9 +65,10 @@ let _profileCache: Profile | null = null;
 const _profileListeners = new Set<(p: Profile) => void>();
 const mapApiProfile = (p: ApiProfile): Profile => ({
   full_name: p.full_name, email: p.email, joined: p.joined ?? undefined,
-  is_seller: Boolean(p.is_seller), merchant_id: p.merchant_id ?? undefined,
+  is_seller: Boolean(p.is_seller), is_admin: Boolean(p.is_admin), merchant_id: p.merchant_id ?? undefined,
   avatar_url: p.avatar_url ?? undefined, phone: p.phone ?? undefined, country: p.country ?? undefined,
   address: p.address ?? undefined, dob: p.dob ?? undefined, state: p.state ?? undefined, city: p.city ?? undefined,
+  bio: p.bio ?? undefined,
 });
 export function setProfileFromApi(p: ApiProfile): void {
   _profileCache = mapApiProfile(p);
@@ -164,10 +165,32 @@ let _currentOrder: unknown = null;
 export const setCurrentOrder = (o: unknown) => { _currentOrder = o; };
 export const getCurrentOrder = <T,>() => _currentOrder as T | null;
 
+// ─── ESCROW COUNTDOWN — a live 1-hour window from an order's creation time ──────
+export const ESCROW_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+export function useOrderCountdown(createdAt?: string | null) {
+  const deadline = createdAt ? new Date(createdAt).getTime() + ESCROW_WINDOW_MS : 0;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deadline) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [deadline]);
+  const ms = Math.max(0, deadline - now);
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60), s = totalSec % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    hasDeadline: deadline > 0,
+    expired: deadline > 0 && ms <= 0,
+    hms: `${pad(h)} : ${pad(m)} : ${pad(s)}`,     // 00 : 59 : 08
+    mmss: `${pad(m + h * 60)}:${pad(s)}`,          // 59:08
+  };
+}
+
 export type Page =
   | "home" | "login" | "signup" | "signup-success" | "marketplace" | "wallet" | "user-profile"
   | "cart" | "notifications" | "support" | "merchant" | "become-merchant" | "ads"
-  | "purchase" | "order" | "referral" | "settings" | "merchants" | "store";
+  | "purchase" | "order" | "referral" | "settings" | "merchants" | "store" | "admin";
 
 export type BrandKey =
   | "telegram" | "whatsapp" | "instagram" | "apple" | "snapchat" | "netflix"
@@ -181,10 +204,10 @@ export type BrandKey =
 // recognisable mark for each platform (no generic colour tile behind them). `bg`
 // is kept only for a few legacy chips; BrandIcon never draws it. Monochrome marks
 // (X, Apple) use currentColor so they adapt to light/dark.
-export const BRAND_LOGOS: Record<BrandKey, { bg:string; svg:React.ReactNode }> = {
+export const BRAND_LOGOS: Record<BrandKey, { bg:string; svg:React.ReactNode | ((uid:string)=>React.ReactNode) }> = {
   telegram: { bg:"#229ED9", svg:<><circle cx="12" cy="12" r="11" fill="#229ED9"/><path fill="#fff" d="M17.1 7.4l-1.85 8.72c-.14.62-.5.77-1.02.48l-2.86-2.11-1.38 1.33c-.15.15-.28.28-.58.28l.2-2.92 5.31-4.8c.23-.2-.05-.32-.36-.12L7.99 13l-2.83-.88c-.61-.2-.62-.61.13-.9l11.06-4.27c.51-.19.96.12.75.34z"/></> },
   whatsapp: { bg:"#25D366", svg:<><path fill="#25D366" d="M12 2a10 10 0 0 0-8.6 15.05L2 22l5.05-1.32A10 10 0 1 0 12 2z"/><path fill="#fff" d="M9.53 7.33c-.18-.4-.36-.34-.5-.35h-.42c-.15 0-.4.06-.6.28-.2.22-.79.77-.79 1.87s.81 2.17.92 2.32c.11.15 1.57 2.4 3.8 3.36 1.86.8 2.24.64 2.65.6.4-.03 1.3-.53 1.48-1.05.18-.51.18-.95.13-1.05-.05-.1-.2-.15-.42-.26-.22-.11-1.3-.64-1.5-.72-.2-.07-.35-.11-.5.11-.15.22-.57.72-.7.87-.13.15-.26.17-.48.06-.22-.11-.93-.34-1.77-1.09-.65-.58-1.1-1.3-1.22-1.52-.13-.22-.01-.34.1-.45.1-.1.22-.26.33-.39.11-.13.14-.22.22-.37.07-.15.03-.28-.02-.39-.05-.11-.48-1.2-.71-1.64z"/></> },
-  instagram:{ bg:"#E1306C", svg:<><defs><radialGradient id="sbIgGrad" cx="30%" cy="105%" r="130%"><stop offset="0" stopColor="#ffd776"/><stop offset=".3" stopColor="#f3603c"/><stop offset=".6" stopColor="#e1306c"/><stop offset="1" stopColor="#5b51d8"/></radialGradient></defs><rect x="2" y="2" width="20" height="20" rx="6" fill="url(#sbIgGrad)"/><rect x="6.4" y="6.4" width="11.2" height="11.2" rx="3.6" fill="none" stroke="#fff" strokeWidth="1.7"/><circle cx="17" cy="7" r="1.15" fill="#fff"/></> },
+  instagram:{ bg:"#E1306C", svg:(uid:string)=><><defs><radialGradient id={uid} cx="30%" cy="105%" r="130%"><stop offset="0" stopColor="#ffd776"/><stop offset=".3" stopColor="#f3603c"/><stop offset=".6" stopColor="#e1306c"/><stop offset="1" stopColor="#5b51d8"/></radialGradient></defs><rect x="2" y="2" width="20" height="20" rx="6" fill={`url(#${uid})`}/><rect x="6.4" y="6.4" width="11.2" height="11.2" rx="3.6" fill="none" stroke="#fff" strokeWidth="1.7"/><circle cx="17" cy="7" r="1.15" fill="#fff"/></> },
   apple:    { bg:"#1c1c1e", svg:<path fill="currentColor" d="M16.4 12.6c0-2.2 1.8-3.3 1.9-3.3-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.6.8-3.3.8-.7 0-1.7-.8-2.8-.8-1.4 0-2.8.8-3.5 2.1-1.5 2.6-.4 6.5 1.1 8.6.7 1 1.6 2.2 2.7 2.1 1.1 0 1.5-.7 2.8-.7s1.6.7 2.8.7c1.1 0 1.9-1 2.6-2 .8-1.2 1.2-2.3 1.2-2.4-.1 0-2.3-.9-2.3-3.5zM14.3 6.3c.6-.7 1-1.7.9-2.7-.9 0-1.9.6-2.5 1.3-.6.6-1 1.6-.9 2.6 1 .1 1.9-.5 2.5-1.2z"/> },
   snapchat: { bg:"#FFFC00", svg:<><circle cx="12" cy="12" r="11" fill="#FFFC00"/><path fill="#111" d="M12 5.4c2 0 3.4 1.5 3.5 3.5.02.44 0 .96-.03 1.46.05-.02.13-.03.2-.03.45 0 .95.28.95.72 0 .35-.28.6-.78.78-.42.15-.86.24-.86.6 0 .5 1.4 1.9 2.6 2.26.26.08.44.26.44.5 0 .43-.87.78-1.56.87-.1.18-.09.44-.26.55-.17.11-.6.08-1.03.08-.35 0-.68.09-1.03.35-.44.34-1.03.77-2.18.77s-1.74-.43-2.18-.77c-.35-.26-.68-.35-1.03-.35-.43 0-.86.03-1.03-.08-.17-.11-.16-.37-.26-.55-.69-.09-1.56-.44-1.56-.87 0-.24.18-.42.44-.5 1.2-.36 2.6-1.76 2.6-2.26 0-.36-.44-.45-.86-.6-.5-.18-.78-.43-.78-.78 0-.44.5-.72.95-.72.07 0 .15.01.2.03-.03-.5-.05-1.02-.03-1.46.1-2 1.5-3.5 3.5-3.5z"/></> },
   netflix:  { bg:"#141414", svg:<path fill="#E50914" d="M8.5 2v20l3.3.3V13l3.4 9.6 3.3.3V2l-3.3.3v9.4L11.6 2z"/> },
@@ -207,7 +230,7 @@ export const BRAND_LOGOS: Record<BrandKey, { bg:string; svg:React.ReactNode }> =
   linkedin: { bg:"#0A66C2", svg:<><rect x="2" y="2" width="20" height="20" rx="4" fill="#0A66C2"/><path fill="#fff" d="M7.1 9.6H4.7V18h2.4V9.6Zm-1.2-4a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8ZM19.4 18v-4.7c0-2.5-1.34-3.66-3.12-3.66-1.44 0-2.08.8-2.44 1.35V9.6H11.5V18h2.36v-4.66c0-1.23.47-1.92 1.5-1.92.94 0 1.66.55 1.66 1.92V18h2.38Z"/></> },
   pinterest:{ bg:"#E60023", svg:<><circle cx="12" cy="12" r="10" fill="#E60023"/><path fill="#fff" d="M12.4 6.4c-3.35 0-5.4 2.24-5.4 5.02 0 1.3.72 2.9 1.87 3.42.18.08.28.04.32-.13l.18-.7c.05-.18.03-.24-.1-.4-.35-.42-.57-.96-.57-1.72 0-2.22 1.66-4.2 4.32-4.2 2.36 0 3.65 1.44 3.65 3.36 0 2.52-1.12 4.65-2.78 4.65-.92 0-1.6-.76-1.38-1.69.26-1.11.77-2.31.77-3.11 0-.72-.39-1.32-1.19-1.32-.94 0-1.7.98-1.7 2.28 0 .83.28 1.4.28 1.4l-1.13 4.78c-.24 1.01-.11 2.5-.05 2.66 0 .1.11.12.16.05.07-.09 1-1.22 1.31-2.35l.5-1.96c.25.48.98.88 1.76.88 2.31 0 3.98-2.12 3.98-5.06 0-2.28-1.94-4.19-4.9-4.19Z"/></> },
   reddit:   { bg:"#FF4500", svg:<><circle cx="12" cy="12" r="10" fill="#FF4500"/><circle cx="8.6" cy="12.4" r="1.25" fill="#fff"/><circle cx="15.4" cy="12.4" r="1.25" fill="#fff"/><path d="M9 15c.85.7 1.9 1 3 1s2.15-.3 3-1" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" fill="none"/><circle cx="18.3" cy="8.2" r="1.5" fill="#fff"/><path d="M12 9.4l1.3-3.2 3.1.9" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" fill="none"/><circle cx="19" cy="11" r="1.6" fill="#fff"/><circle cx="5" cy="11" r="1.6" fill="#fff"/></> },
-  threads:  { bg:"#000000", svg:<path fill="currentColor" d="M16.3 11.4c-.08-.04-.16-.08-.25-.11-.15-2.7-1.63-4.25-4.12-4.27-1.5-.01-2.75.62-3.5 1.78l1.37.94c.56-.85 1.44-1.03 2.12-1.03h.02c.85 0 1.5.25 1.92.74.3.36.5.85.6 1.47-.75-.13-1.56-.17-2.42-.12-2.43.14-3.99 1.55-3.88 3.52.05 1 .55 1.86 1.4 2.42.72.47 1.65.7 2.62.65 1.28-.07 2.29-.56 2.98-1.45.53-.68.86-1.56 1.01-2.66.62.37 1.07.87 1.32 1.46.43 1.01.45 2.66-.9 4.01-1.18 1.18-2.6 1.69-4.75 1.7-2.38-.01-4.19-.78-5.36-2.27C5.4 16.3 4.83 14.35 4.8 12c.02-2.35.6-4.3 1.7-5.8 1.17-1.5 2.98-2.26 5.36-2.28 2.4.02 4.24.79 5.47 2.29.6.74 1.06 1.66 1.35 2.74l1.6-.43c-.36-1.32-.93-2.46-1.7-3.4C17.5 3.28 15.2 2.32 12.2 2.3h-.01C9.2 2.32 6.9 3.29 5.4 5.19 4.06 6.87 3.38 9.2 3.36 12v.01c.02 2.79.7 5.12 2.04 6.8 1.5 1.9 3.8 2.87 6.8 2.89h.01c2.66-.02 4.53-.72 6.07-2.26 2.02-2.02 1.96-4.55 1.29-6.1-.48-1.11-1.4-2.02-2.66-2.63l-.6-.31ZM11.9 15.9c-1.07.06-2.18-.42-2.24-1.5-.04-.8.57-1.69 2.3-1.79.2-.01.39-.02.58-.02.63 0 1.21.06 1.74.18-.2 2.47-1.36 3.07-2.38 3.13Z"/> },
+  threads:  { bg:"#000000", svg:<><rect x="2" y="2" width="20" height="20" rx="6" fill="#000"/><path fill="#fff" d="M16.05 11.55c-.07-.03-.14-.07-.22-.1-.13-2.36-1.42-3.72-3.6-3.73-1.31-.01-2.4.54-3.06 1.55l1.2.82c.49-.74 1.26-.9 1.85-.9h.02c.74 0 1.3.22 1.68.65.26.31.44.74.53 1.28-.66-.11-1.36-.15-2.12-.1-2.12.12-3.48 1.35-3.39 3.07.05.88.48 1.63 1.22 2.11.63.42 1.44.62 2.29.57 1.12-.06 2-.49 2.6-1.27.46-.6.76-1.36.89-2.32.54.32.94.75 1.15 1.27.37.88.4 2.33-.78 3.5-1.03 1.03-2.27 1.48-4.15 1.49-2.08-.01-3.66-.68-4.68-1.98-.96-1.22-1.45-2.98-1.47-5.24.02-2.26.51-4.02 1.47-5.24 1.02-1.3 2.6-1.98 4.68-1.99 2.1.02 3.71.69 4.78 2 .53.65.93 1.46 1.19 2.4l1.28-.34c-.31-1.15-.81-2.15-1.49-2.98-1.37-1.68-3.38-2.54-5.75-2.55h-.01c-2.37.01-4.36.87-5.68 2.55-1.17 1.5-1.77 3.58-1.79 6.19v.01c.02 2.61.62 4.7 1.79 6.19 1.32 1.68 3.31 2.53 5.68 2.55h.01c2.32-.02 3.96-.63 5.31-1.98 1.77-1.77 1.72-3.98 1.13-5.34-.42-.97-1.23-1.76-2.34-2.29Zm-3.68 3.79c-.94.05-1.9-.37-1.95-1.31-.04-.7.5-1.48 2.01-1.56.17-.01.34-.02.51-.02.55 0 1.06.05 1.52.16-.17 2.16-1.19 2.68-2.09 2.73Z"/></> },
   signal:   { bg:"#2C6BED", svg:<><circle cx="12" cy="12" r="10" fill="#3A76F0"/><path fill="none" stroke="#fff" strokeWidth="1.7" d="M12 6.8a5.2 5.2 0 0 0-4.55 7.73l-.65 2.34 2.4-.63A5.2 5.2 0 1 0 12 6.8Z"/></> },
   viber:    { bg:"#7360F2", svg:<><circle cx="12" cy="12" r="10" fill="#7360F2"/><path fill="#fff" d="M10.15 8.3c.28-.13.6-.03.76.23l.85 1.42c.14.24.1.55-.1.74l-.5.48c-.13.13-.15.24-.06.42.35.7 1.15 1.5 1.87 1.83.18.09.3.06.42-.07l.48-.5c.19-.2.5-.24.74-.1l1.42.85c.26.16.36.48.23.76-.29.62-1 1.05-1.72 1-2.3-.16-5.1-2.96-5.26-5.26-.05-.72.38-1.43 1-1.72Z"/></> },
   outlook:  { bg:"#0A67C0", svg:<><rect x="9" y="5.5" width="12" height="13" rx="1.5" fill="#0A67C0"/><path fill="#fff" d="M15 8h5.4c.33 0 .6.27.6.6v1L15 13.2z"/><path fill="#28A8EA" d="M21 9.6v6.8c0 .33-.27.6-.6.6H15V13.2z"/><rect x="2.5" y="6.5" width="9.5" height="11" rx="1.4" fill="#0364B8"/><ellipse cx="7.25" cy="12" rx="2.7" ry="2.9" fill="none" stroke="#fff" strokeWidth="1.5"/></> },
@@ -219,13 +242,21 @@ export const BRAND_LOGOS: Record<BrandKey, { bg:string; svg:React.ReactNode }> =
 };
 
 export function BrandIcon({ brand, size=48, radius }: { brand:BrandKey; size?:number; radius?:number }) {
-  const b = BRAND_LOGOS[brand];
+  // Fall back safely for unknown/missing keys (e.g. cart items cached before a
+  // brand was stored) so a bad key can never crash the tree reading `.svg`.
+  const b = BRAND_LOGOS[brand] ?? BRAND_LOGOS.vpn ?? Object.values(BRAND_LOGOS)[0];
+  // Some marks embed an SVG gradient/filter that needs a DOM-unique id — a fixed
+  // id collides when the same logo renders twice (e.g. a marketplace card AND the
+  // filter panel), and unmounting one breaks the other's `url(#id)` reference,
+  // painting it black. Give each instance its own id via useId.
+  const uid = "sb-" + useId().replace(/:/g, "");
+  const content = typeof b.svg === "function" ? b.svg(uid) : b.svg;
   // No colour tile behind the logo — the real, full-colour mark on a transparent
   // background. `radius` is accepted for call-site compatibility but unused now.
   void radius;
   return (
     <span className="inline-flex items-center justify-center shrink-0 select-none" style={{ width:size, height:size, color:"var(--sb-nav-active)" }}>
-      <svg width={size} height={size} viewBox="0 0 24 24">{b.svg}</svg>
+      <svg width={size} height={size} viewBox="0 0 24 24">{content}</svg>
     </span>
   );
 }
@@ -298,6 +329,7 @@ export function DesktopTopNav({ setPage, active }: { setPage:(p:Page)=>void; act
     { label: profile.is_seller ? "Orders" : "Purchase", page:"purchase" },
     { label:"Ads",      page:"ads" },
     { label:"Wallet",   page:"wallet" },
+    ...(profile.is_admin ? [{ label:"Admin", page:"admin" as Page }] : []),
   ];
   return (
     <nav className="hidden md:flex items-center px-8 gap-8 shrink-0" style={{ height: 64, background: MBG, borderBottom: `1px solid ${MBD}`, fontFamily: FONT, position: "relative", zIndex: 60 }}>
@@ -650,6 +682,20 @@ export function useScrollLock(locked: boolean): void {
    (product cards, list rows, etc.). Theme-aware and respects reduced-motion. */
 export function Skeleton({ className = "", rounded = "rounded-md", style }: { className?: string; rounded?: string; style?: CSSProperties }) {
   return <span className={`sb-skeleton block ${rounded} ${className}`} style={style} aria-hidden="true"/>;
+}
+
+/* Premium verified badge — a green scalloped seal with a white check. Used for
+   every "verified" indicator across the app (storefront, merchant cards, header). */
+export function VerifiedBadge({ size = 18, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 120 120" role="img" aria-label="Verified" className={`shrink-0 ${className}`}>
+      <path d="m99.5 52.8-1.9 4.7c-.6 1.6-.6 3.3 0 4.9l1.9 4.7c1.1 2.8.2 6-2.3 7.8l-4.2 2.9c-1.4 1-2.3 2.5-2.7 4.1l-.9 5c-.6 3-3.1 5.2-6.1 5.3l-5.1.2c-1.7.1-3.3.8-4.5 2l-3.5 3.7c-2.1 2.2-5.4 2.7-8 1.2l-4.4-2.6c-1.5-.9-3.2-1.1-4.9-.7l-5 1.2c-2.9.7-6-.7-7.4-3.4l-2.3-4.6c-.8-1.5-2.1-2.7-3.7-3.2l-4.8-1.6c-2.9-1-4.7-3.8-4.4-6.8l.5-5.1c.2-1.7-.3-3.4-1.4-4.7l-3.2-4c-1.9-2.4-1.9-5.7 0-8.1l3.2-4c1.1-1.3 1.6-3 1.4-4.7l-.5-5.1c-.3-3 1.5-5.8 4.4-6.8l4.8-1.6c1.6-.5 2.9-1.7 3.7-3.2l2.3-4.6c1.4-2.7 4.4-4.1 7.4-3.4l5 1.2c1.6.4 3.4.2 4.9-.7l4.4-2.6c2.6-1.5 5.9-1.1 8 1.2l3.5 3.7c1.2 1.2 2.8 2 4.5 2l5.1.2c3 .1 5.6 2.3 6.1 5.3l.9 5c.3 1.7 1.3 3.2 2.7 4.1l4.2 2.9c2.5 2.2 3.5 5.4 2.3 8.2z" fill="#00d566"/>
+      <g opacity=".15" fill="#000">
+        <path d="m43.4 93.5-2.3-4.6c-.8-1.5-2.1-2.7-3.7-3.2l-4.8-1.6c-2.9-1-4.7-3.8-4.4-6.8l.5-5.1c.2-1.7-.3-3.4-1.4-4.7l-3.2-4c-1.9-2.4-1.9-5.7 0-8.1l3.2-4c1.1-1.3 1.6-3 1.4-4.7l-.5-5.1c-.3-3 1.5-5.8 4.4-6.8l4.8-1.6c1.6-.5 2.9-1.7 3.7-3.2l2.3-4.6c.8-1.6 2.2-2.7 3.7-3.2-2.7-.4-5.4 1-6.6 3.5l-2.3 4.6c-.8 1.5-2.1 2.7-3.7 3.2l-4.8 1.6c-2.9 1-4.7 3.8-4.4 6.8l.5 5.1c.2 1.7-.3 3.4-1.4 4.7l-3.2 4c-1.9 2.4-1.9 5.7 0 8.1l3.2 4c1.1 1.3 1.6 3 1.4 4.7l-.5 5.1c-.3 3 1.5 5.8 4.4 6.8l4.8 1.6c1.6.5 2.9 1.7 3.7 3.2l2.3 4.6c1.4 2.7 4.4 4.1 7.4 3.4l.6-.1c-2.2-.4-4.1-1.6-5.1-3.6z"/>
+      </g>
+      <path d="m53.5 75.3c-1.4 0-2.8-.6-3.8-1.7l-12.5-14.3c-1.8-2.1-1.6-5.2.4-7.1 2.1-1.8 5.2-1.6 7.1.4l9.4 10.7 21.9-17.6c2.1-1.7 5.3-1.4 7 .8s1.4 5.3-.8 7l-25.6 20.7c-.9.7-2 1.1-3.1 1.1z" fill="#fff"/>
+    </svg>
+  );
 }
 
 /* Load gate for a data page/section. Guarantees the skeleton is ALWAYS visible

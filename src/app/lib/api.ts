@@ -23,6 +23,7 @@ export interface ApiProduct {
   available: number;
   badge: string | null;
   preview_url?: string | null;
+  description?: string | null;
 }
 
 export interface ApiMerchant {
@@ -37,6 +38,8 @@ export interface ApiMerchant {
   location?: string | null;
   joined?: string | null;
   bio?: string | null;
+  has_status?: boolean;
+  status_unviewed?: boolean;
 }
 
 export interface ApiPurchase {
@@ -50,6 +53,7 @@ export interface ApiPurchase {
   price: number;
   status: string;
   reviewed: boolean | null;
+  delivered?: boolean | null;
   username: string | null;
   password: string | null;
   note: string | null;
@@ -84,6 +88,28 @@ export const fetchMerchants = () => get<ApiMerchant[]>("/api/merchants");
 // Public storefront resolve by merchant_id / id / name-slug (cold deep-link load).
 export const fetchStorefront = (key: string) => get<ApiStorefront>(`/api/merchants/${encodeURIComponent(key)}`);
 
+// Seller status / stories.
+export interface ApiStatusReaction { emoji: string; name: string }
+export interface ApiStatus { id: number; kind: "image" | "video" | "text"; media_url: string | null; caption: string | null; bg: string | null; created_at: string; reactions?: ApiStatusReaction[]; viewers?: string[] }
+export const reactStatus = async (id: number, emoji: string): Promise<boolean> => {
+  try { return (await fetch(`/api/status/${id}/react`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ emoji }) })).ok; } catch { return false; }
+};
+export const viewStatus = async (id: number): Promise<void> => {
+  try { await fetch(`/api/status/${id}/view`, { method: "POST" }); } catch { /* best-effort */ }
+};
+export const fetchMerchantStatus = (merchantId: string) => get<ApiStatus[]>(`/api/status?merchant=${encodeURIComponent(merchantId)}`);
+export const fetchMyStatus = () => get<ApiStatus[]>("/api/status?mine=1");
+export const postStatus = async (payload: { kind: "image" | "video" | "text"; media?: string; caption?: string; bg?: string }): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const res = await fetch("/api/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Could not post status." };
+  } catch { return { ok: false, error: "Network error — please try again." }; }
+};
+export const deleteStatus = async (id: number): Promise<boolean> => {
+  try { return (await fetch(`/api/status/${id}`, { method: "DELETE" })).ok; } catch { return false; }
+};
+
 // Cascading geo dropdowns for the settings page (country → states → cities).
 export interface ApiState { code: string; name: string }
 export const fetchStates = (country: string) => get<ApiState[]>(`/api/geo/states?country=${encodeURIComponent(country)}`);
@@ -91,9 +117,9 @@ export const fetchCities = (country: string, state: string) => get<string[]>(`/a
 // role "buyer" → orders I placed; role "seller" → orders placed against me.
 export const fetchPurchases = (role: "buyer" | "seller" = "buyer") => get<ApiPurchase[]>(`/api/purchases?role=${role}`);
 export const fetchOrderMessages = (orderId: string) => get<ApiMessage[]>(`/api/orders/${orderId}/messages`);
-export interface ApiProfile { id: number; full_name: string; email: string; joined: string | null; is_seller?: boolean; seller_since?: string | null; merchant_id?: string | null; avatar_url?: string | null; phone?: string | null; country?: string | null; address?: string | null; dob?: string | null; state?: string | null; city?: string | null; }
+export interface ApiProfile { id: number; full_name: string; email: string; joined: string | null; is_seller?: boolean; is_admin?: boolean; seller_since?: string | null; merchant_id?: string | null; avatar_url?: string | null; phone?: string | null; country?: string | null; address?: string | null; dob?: string | null; state?: string | null; city?: string | null; bio?: string | null; }
 export interface UpdateResult { ok: boolean; error?: string }
-export const updateProfile = async (fields: { country?: string; state?: string; city?: string; address?: string; dob?: string }): Promise<UpdateResult> => {
+export const updateProfile = async (fields: { country?: string; state?: string; city?: string; address?: string; dob?: string; bio?: string }): Promise<UpdateResult> => {
   try {
     const res = await fetch("/api/profile/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -141,7 +167,7 @@ export const authLogout = async (): Promise<boolean> => {
 };
 export const fetchAuthSession = () => get<{ authenticated: boolean; profile?: ApiProfile | null }>("/api/auth/session");
 
-export interface PurchaseResult { ok: boolean; error?: string; needsFunds?: boolean; balance?: number; price?: number }
+export interface PurchaseResult { ok: boolean; error?: string; needsFunds?: boolean; balance?: number; price?: number; order?: ApiPurchase }
 export const createPurchase = async (order: {
   title: string; glyph: string; description: string; product_type: string; seller: string; price: number; product_id?: number;
 }): Promise<PurchaseResult> => {
@@ -151,13 +177,46 @@ export const createPurchase = async (order: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(order),
     });
-    const data = (await res.json().catch(() => ({}))) as { error?: string; needs_funds?: boolean; balance?: number; price?: number };
+    const data = (await res.json().catch(() => ({}))) as { error?: string; needs_funds?: boolean; balance?: number; price?: number } & Partial<ApiPurchase>;
     if (!res.ok) return { ok: false, error: data.error ?? "Purchase failed.", needsFunds: Boolean(data.needs_funds), balance: data.balance, price: data.price };
-    return { ok: true };
+    return { ok: true, order: (data.id ? (data as ApiPurchase) : undefined) };
   } catch {
     return { ok: false, error: "Could not reach the server — check your connection." };
   }
 };
+
+// Escrow lifecycle: buyer confirms (releases funds to the seller) or cancels
+// (refunds themselves once the 1-hour delivery window has passed).
+export interface OrderActionResult { ok: boolean; error?: string }
+const orderAction = async (id: string, action: "confirm" | "cancel" | "deliver"): Promise<OrderActionResult> => {
+  try {
+    const res = await fetch(`/api/purchases/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Could not update the order." };
+  } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
+};
+// ── Admin ─────────────────────────────────────────────────────────────────────
+export interface AdminUser { email: string; full_name: string; is_seller?: boolean; joined?: string | null; country?: string | null; avatar_url?: string | null; }
+export interface AdminAdRow { id: number; title: string; owner_email?: string | null; price: number; quantity: number; status: string; brand: string; created_at: string; }
+export interface AdminOrderRow { id: string; title: string; buyer?: string | null; buyer_email?: string | null; seller?: string | null; seller_email?: string | null; price: number; status: string; created_at: string; }
+export interface AdminOverview {
+  stats: { users: number; sellers: number; ads: number; activeAds: number; orders: number; pending: number; completed: number; cancelled: number; gmv: number; fees: number };
+  users: AdminUser[]; ads: AdminAdRow[]; orders: AdminOrderRow[];
+}
+export const fetchAdminOverview = () => get<AdminOverview>("/api/admin/overview");
+const adminAction = async (path: string): Promise<OrderActionResult> => {
+  try {
+    const res = await fetch(path, { method: "POST" });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Action failed." };
+  } catch { return { ok: false, error: "Could not reach the server." }; }
+};
+export const adminRemoveAd = (id: number) => adminAction(`/api/admin/ads/${id}/remove`);
+export const adminResolveOrder = (id: string) => adminAction(`/api/admin/orders/${encodeURIComponent(id)}/resolve`);
+
+export const confirmOrder = (id: string) => orderAction(id, "confirm");
+export const cancelOrder = (id: string) => orderAction(id, "cancel");
+export const markDelivered = (id: string) => orderAction(id, "deliver");
 
 export const sendOrderMessage = async (orderId: string, text: string) => {
   try {
@@ -172,10 +231,10 @@ export const sendOrderMessage = async (orderId: string, text: string) => {
   }
 };
 
-export interface ApiCartItem { id: number; title: string; description: string | null; brand: string; seller: string; price: number; qty: number; created_at: string; }
+export interface ApiCartItem { id: number; title: string; description: string | null; brand: string; seller: string; seller_avatar: string | null; price: number; qty: number; created_at: string; }
 export interface ApiNotification { id: number; kind: string; title: string; body: string | null; created_at: string; }
 export interface ApiReview { id: number; product_title?: string | null; seller?: string | null; sentiment: string; feedback: string | null; created_at: string; response?: string | null; response_at?: string | null; order_id?: string | null; }
-export interface ApiAd { id: number; title: string; brand: string; category: string; price: number; quantity: number; status: string; created_at: string; }
+export interface ApiAd { id: number; title: string; brand: string; category: string; price: number; quantity: number; status: string; created_at: string; description?: string | null; }
 
 export const fetchCart = () => get<ApiCartItem[]>("/api/cart");
 export const fetchNotifications = () => get<ApiNotification[]>("/api/notifications");
@@ -212,6 +271,20 @@ export const activateSeller = async (): Promise<ActivateResult> => {
   } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
 };
 export const fetchWalletBalance = () => get<{ balance: number; merchant_fee: number }>("/api/wallet/balance");
+
+// Start a Korapay wallet top-up: sends the USD amount + local currency, gets back
+// the hosted checkout URL to redirect the buyer to.
+export interface DepositResult { ok: boolean; checkout_url?: string; error?: string }
+export const startDeposit = async (amount: number, currency: string): Promise<DepositResult> => {
+  try {
+    const res = await fetch("/api/wallet/deposit", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, currency }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string; checkout_url?: string };
+    if (!res.ok || !data.checkout_url) return { ok: false, error: data.error ?? "Could not start the deposit." };
+    return { ok: true, checkout_url: data.checkout_url };
+  } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
+};
 // A buyer leaves a review on one of their orders (seller resolved server-side).
 export interface ReviewResult { ok: boolean; error?: string }
 export const submitReview = async (r: { order_id: string; sentiment: string; feedback: string }): Promise<ReviewResult> => {
@@ -233,7 +306,24 @@ export const respondToReview = async (id: number, response: string): Promise<Rev
     return { ok: true };
   } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
 };
-export const createAd = (ad: { title: string; brand: string; category: string; price: number; quantity: number }) => post("/api/ads", ad);
+export const createAd = (ad: { title: string; brand: string; category: string; price: number; quantity: number; description?: string }) => post("/api/ads", ad);
+// One account's login details — a single unit of stock.
+export interface AdCredential { login: string; password: string; email?: string; emailPass?: string; previewLink?: string; notes?: string }
+// Add stock to an existing ad by uploading real credentials / delete it (owner-only, server-enforced).
+export const addAdStock = async (id: number, credentials: AdCredential[]): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const res = await fetch(`/api/ads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ credentials }) });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Could not add stock." };
+  } catch { return { ok: false, error: "Network error — please try again." }; }
+};
+export const deleteAd = async (id: number): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const res = await fetch(`/api/ads/${id}`, { method: "DELETE" });
+    if (res.ok) return { ok: true };
+    return { ok: false, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Could not delete ad." };
+  } catch { return { ok: false, error: "Network error — please try again." }; }
+};
 
 // ── Session cache: lets pages render the last-known live data instantly on
 // refresh instead of flashing the built-in fallback first. ────────────────

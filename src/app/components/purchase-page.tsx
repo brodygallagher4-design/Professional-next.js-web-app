@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   P, MBG, MCARD, MCARD2, MBD, FONT,
-  DesktopTopNav, AppMobileHeader, setCurrentOrder, useProfile, EmptyMegaphone, Spinner, useScrollLock, Skeleton,
+  DesktopTopNav, AppMobileHeader, setCurrentOrder, useProfile, EmptyMegaphone, Spinner, useScrollLock, Skeleton, useOrderCountdown,
 } from "../shared";
 import type { Page, BrandKey } from "../shared";
-import { fetchPurchases, readCache, writeCache, submitReview } from "../lib/api";
+import { readCache, writeCache, submitReview } from "../lib/api";
+import { usePurchasesQuery } from "../lib/query";
 import { toast } from "../toast";
 
 // Safe clipboard copy — falls back to execCommand when the Clipboard API is
@@ -45,7 +46,9 @@ export interface Purchase {
   sellerColor: string;
   price: number;
   time: string;
-  status: "completed" | "processing";
+  status: "completed" | "processing" | "pending" | "cancelled";
+  createdAt?: string;
+  delivered?: boolean;
   reviewed?: boolean;
   productType: string;
   username: string;
@@ -144,39 +147,34 @@ function formatOrderTime(iso: string): string {
    no orders shows a real empty state, never someone else's data. */
 export function usePurchases(role: "buyer" | "seller" = "buyer"): { items: Purchase[]; loaded: boolean } {
   const cacheKey = `sb-purchases-${role}`;
-  const [items, setItems] = useState<Purchase[]>(() => readCache<Purchase[]>(cacheKey) ?? []);
-  const [loaded, setLoaded] = useState<boolean>(() => readCache<Purchase[]>(cacheKey) != null);
-  useEffect(() => {
-    let cancelled = false;
-    fetchPurchases(role).then((rows) => {
-      if (cancelled) return;
-      const mapped = (rows ?? []).map((r) => ({
-        id: r.id,
-        buyer: r.buyer ?? undefined,
-        brand: GLYPH_BRAND[r.glyph] ?? "whatsapp",
-        glyph: r.glyph,
-        title: r.title,
-        desc: r.description ?? "",
-        cardSubtitle: r.description ?? "",
-        seller: r.seller,
-        sellerColor: "#6d28d9",
-        price: Number(r.price) || 0,
-        time: formatOrderTime(r.created_at),
-        status: r.status === "processing" ? "processing" as const : "completed" as const,
-        reviewed: Boolean(r.reviewed),
-        productType: r.product_type,
-        username: r.username ?? "",
-        password: r.password ?? "",
-        note: r.note ?? "",
-        noteTime: r.note_time ?? "",
-      }));
-      writeCache(cacheKey, mapped);
-      setItems(mapped);
-      setLoaded(true);
-    });
-    return () => { cancelled = true; };
-  }, [role, cacheKey]);
-  return { items, loaded };
+  const { data, isFetched } = usePurchasesQuery(role);
+  const items = useMemo<Purchase[]>(() => {
+    if (!data) return readCache<Purchase[]>(cacheKey) ?? [];
+    return data.map((r) => ({
+      id: r.id,
+      buyer: r.buyer ?? undefined,
+      brand: GLYPH_BRAND[r.glyph as "whatsapp" | "voice" | "facebook"] ?? "whatsapp",
+      glyph: (r.glyph ?? "whatsapp") as "whatsapp" | "voice" | "facebook",
+      title: r.title,
+      desc: r.description ?? "",
+      cardSubtitle: r.description ?? "",
+      seller: r.seller ?? "Seller",
+      sellerColor: "#6d28d9",
+      price: Number(r.price) || 0,
+      time: formatOrderTime(r.created_at ?? ""),
+      status: (["pending","completed","cancelled","processing"].includes(String(r.status)) ? r.status : "completed") as Purchase["status"],
+      createdAt: r.created_at,
+      delivered: Boolean(r.delivered),
+      reviewed: Boolean(r.reviewed),
+      productType: r.product_type ?? "Account",
+      username: r.username ?? "",
+      password: r.password ?? "",
+      note: r.note ?? "",
+      noteTime: r.note_time ?? "",
+    }));
+  }, [data, cacheKey]);
+  useEffect(() => { if (data) writeCache(cacheKey, items); }, [data, items, cacheKey]);
+  return { items, loaded: isFetched || readCache<Purchase[]>(cacheKey) != null };
 }
 
 /* Bar-chart stat icon — the exact same mark used on the profile page, so the
@@ -236,6 +234,9 @@ function DeliveryChip() {
 function PurchaseRow({ item, first, onPreview, onReview, onSeeTrade, sellerView = false }: {
   item: Purchase; first: boolean; onPreview: () => void; onReview: () => void; onSeeTrade: () => void; sellerView?: boolean;
 }) {
+  const { hasDeadline, expired, mmss } = useOrderCountdown(item.createdAt);
+  const isPending = item.status === "pending" || item.status === "processing";
+  const isCancelled = item.status === "cancelled";
   return (
     <div className="px-5 md:px-6 py-5 md:py-6" style={{ borderTop: first ? "none" : `1px solid ${MBD}` }}>
       <div className="flex gap-4">
@@ -258,11 +259,26 @@ function PurchaseRow({ item, first, onPreview, onReview, onSeeTrade, sellerView 
           </div>
         </div>
 
-        {/* Status + date */}
-        <div className="flex flex-col items-end gap-2.5 shrink-0 max-w-[180px] text-right">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold" style={{ background: "rgba(34,197,94,0.12)", color: "#22c55e" }}>
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }}/> Completed
-          </span>
+        {/* Status + date (+ live escrow countdown while pending) */}
+        <div className="flex flex-col items-end gap-2 shrink-0 max-w-[180px] text-right">
+          {isPending && hasDeadline && !expired && (
+            <div className="leading-tight">
+              <p className="text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}>Time left</p>
+              <p className="text-[15px] font-extrabold tabular-nums" style={{ color: "#16a34a" }}>{mmss}</p>
+            </div>
+          )}
+          {(() => {
+            const meta = isCancelled
+              ? { label: "Cancelled", color: "#e02d2d", bg: "rgba(224,45,45,0.12)" }
+              : isPending
+                ? (expired ? { label: "Action needed", color: "#d97706", bg: "rgba(217,119,6,0.14)" } : { label: "Pending", color: "#d97706", bg: "rgba(217,119,6,0.14)" })
+                : { label: "Completed", color: "#22c55e", bg: "rgba(34,197,94,0.12)" };
+            return (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold" style={{ background: meta.bg, color: meta.color }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }}/> {meta.label}
+              </span>
+            );
+          })()}
           <span className="text-[13px] leading-snug" style={{ color: "var(--sb-chip-text)" }}>{item.time}</span>
         </div>
       </div>
@@ -296,6 +312,8 @@ function PurchaseRow({ item, first, onPreview, onReview, onSeeTrade, sellerView 
 
 export function OrderPreviewModal({ item, onClose, onSeeTrade }: { item: Purchase; onClose: () => void; onSeeTrade: () => void }) {
   useScrollLock(true);
+  const { hasDeadline, expired, hms } = useOrderCountdown(item.createdAt);
+  const isPending = item.status === "pending" || item.status === "processing";
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)", fontFamily: FONT }} onClick={onClose}>
       <div className="w-full max-w-[560px] max-h-[92vh] overflow-y-auto rounded-[18px] shadow-2xl animate-[popIn_.22s_cubic-bezier(.2,.9,.3,1.3)]" style={{ background: "var(--sb-card)", border: `1px solid ${MBD}` }} onClick={(e) => e.stopPropagation()}>
@@ -362,12 +380,20 @@ export function OrderPreviewModal({ item, onClose, onSeeTrade }: { item: Purchas
           </div>
         </div>
 
-        {/* Important warning */}
+        {/* Important warning — live escrow window */}
         <div className="mx-5 mt-4 rounded-[12px] px-4 py-3.5 flex items-start gap-3" style={{ background: "var(--sb-note-bg)" }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e58f2a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
           <div className="text-[13px] leading-relaxed">
             <p className="text-white font-bold text-[14px] mb-0.5">Important</p>
-            <p style={{ color: "var(--sb-note-text)" }}>You have <span className="font-bold" style={{ color: P }}>Time expired</span> to log in and confirm this account. If the product is invalid, you can report it after the timer reaches 00:00.</p>
+            <p style={{ color: "var(--sb-note-text)" }}>
+              {item.status === "cancelled"
+                ? "This order was cancelled and refunded to your wallet."
+                : item.status === "completed"
+                  ? "This order is complete — the funds have been released to the seller."
+                  : isPending && hasDeadline && !expired
+                    ? <>You have <span className="font-bold tabular-nums" style={{ color: P }}>{hms}</span> to log in and confirm this account. If it&apos;s invalid, you can cancel for a refund once the timer reaches 00:00.</>
+                    : "The confirmation window has ended — you can cancel this order for a refund, or report a problem from the trade page."}
+            </p>
           </div>
         </div>
 
@@ -564,9 +590,13 @@ export function MyPurchasePage({ setPage }: { setPage: (p: Page) => void }) {
   const visibleOrders = purchases
     .filter(o => statusFilter === "all" || o.status === statusFilter)
     .filter(o => !q || o.title.toLowerCase().includes(q) || o.seller.toLowerCase().includes(q));
-  const revenue = purchases.reduce((sum, o) => sum + o.price, 0);
+  // Escrow-aware earnings: sellers only "earn" once an order is confirmed
+  // (completed); pending orders' payouts are shown as held in escrow.
+  const isPend = (s: Purchase["status"]) => s === "pending" || s === "processing";
   const completedCount = purchases.filter(o => o.status === "completed").length;
-  const processingCount = purchases.length - completedCount;
+  const pendingCount = purchases.filter(o => isPend(o.status)).length;
+  const earned = +purchases.filter(o => o.status === "completed").reduce((sum, o) => sum + o.price * 0.9, 0).toFixed(2);
+  const inEscrow = +purchases.filter(o => isPend(o.status)).reduce((sum, o) => sum + o.price * 0.9, 0).toFixed(2);
   const listForRender = seller ? visibleOrders : purchases;
 
   return (
@@ -595,10 +625,10 @@ export function MyPurchasePage({ setPage }: { setPage: (p: Page) => void }) {
         {seller && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
-              <SellerStatCard label="Total Orders" value={String(purchases.length)} sub="All time" tint="rgba(37,99,235,0.25)" colors={["#3b82f6","#60a5fa","#93c5fd"]}/>
-              <SellerStatCard label="Revenue" value={`$${revenue.toFixed(2)}`} sub="Net after fees" tint="rgba(22,163,74,0.22)" colors={["#4ade80","#22c55e","#16a34a"]}/>
-              <SellerStatCard label="Completed" value={String(completedCount)} sub="Delivered" tint="rgba(16,185,129,0.22)" colors={["#34d399","#10b981","#059669"]}/>
-              <SellerStatCard label="Processing" value={String(processingCount)} sub="Awaiting delivery" tint="rgba(180,83,9,0.3)" colors={["#fbbf24","#f59e0b","#d97706"]}/>
+              <SellerStatCard label="Earned" value={`$${earned.toFixed(2)}`} sub="Released, net of fees" tint="rgba(22,163,74,0.22)" colors={["#4ade80","#22c55e","#16a34a"]}/>
+              <SellerStatCard label="In Escrow" value={`$${inEscrow.toFixed(2)}`} sub="Held until confirmed" tint="rgba(180,83,9,0.3)" colors={["#fbbf24","#f59e0b","#d97706"]}/>
+              <SellerStatCard label="Completed" value={String(completedCount)} sub="Confirmed & paid" tint="rgba(16,185,129,0.22)" colors={["#34d399","#10b981","#059669"]}/>
+              <SellerStatCard label="Pending" value={String(pendingCount)} sub="Awaiting confirmation" tint="rgba(37,99,235,0.25)" colors={["#3b82f6","#60a5fa","#93c5fd"]}/>
             </div>
             <div className="flex flex-col sm:flex-row gap-2.5 mt-4">
               <div className="flex-1 flex items-center gap-2.5 px-4 py-2.5 rounded-full" style={{ background: "var(--sb-chip)" }}>

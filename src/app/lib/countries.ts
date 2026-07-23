@@ -80,7 +80,10 @@ export const countryByIso = (iso?: string | null): Country | undefined =>
 
 /* Validates a national phone number for a country. Returns the normalized
    international number (dial + national digits) or an error message. */
-export function validatePhone(iso: string, raw: string): { ok: true; e164: string } | { ok: false; error: string } {
+// Flat (non-discriminated) result — this project builds with `strict: false`, so
+// TS won't narrow a discriminated union on `!result.ok`; a flat shape keeps
+// `.error` / `.e164` always accessible without narrowing.
+export function validatePhone(iso: string, raw: string): { ok: boolean; e164?: string; error?: string } {
   const c = countryByIso(iso);
   if (!c) return { ok: false, error: "Select your country." };
   const digits = raw.replace(/[\s\-().]/g, "");

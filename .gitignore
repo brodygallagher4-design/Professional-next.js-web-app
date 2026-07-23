@@ -30,3 +30,9 @@ NUL
 .vercel
 next-env.d.ts
 *.tsbuildinfo
+
+# Testing
+/coverage
+/playwright-report
+/test-results
+/e2e/.auth

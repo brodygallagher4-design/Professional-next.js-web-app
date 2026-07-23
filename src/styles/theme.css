@@ -72,6 +72,10 @@
   --sb-chip-text: #9ca3af;
   --sb-note-bg: rgba(214, 178, 58, 0.12);
   --sb-note-text: #cbb463;
+  --sb-cart-bg: #000000;
+  --sb-cart-card: #0b0b0d;
+  --sb-cart-line: rgba(255, 255, 255, 0.07);
+  --sb-chip-tint: rgba(255, 255, 255, 0.06);
 }
 
 html.theme-light {
@@ -94,6 +98,10 @@ html.theme-light {
   --sb-chip-text: #5c626e;
   --sb-note-bg: #fbf3d2;
   --sb-note-text: #6b6027;
+  --sb-cart-bg: #f1f2f4;
+  --sb-cart-card: #ffffff;
+  --sb-cart-line: rgba(15, 23, 42, 0.08);
+  --sb-chip-tint: #f4f5f7;
 }
 
 /* ── Light-mode text remaps (dark-first utilities) ─────────────────────── */
@@ -279,7 +287,13 @@ html.theme-light { --sb-skeleton-base: rgba(15,23,42,0.07); --sb-skeleton-shine:
 
 /* Page entrance animation (settings, referrals) */
 @keyframes sbPageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@media (prefers-reduced-motion: reduce) { [style*="sbPageIn"] { animation: none !important; } }
+@keyframes sbSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.sb-muted { color: var(--sb-chip-text); }
+.sb-range { -webkit-appearance: none; appearance: none; height: 5px; border-radius: 999px; background: rgba(255,255,255,.16); accent-color: #f04e23; outline: none; }
+html.theme-light .sb-range { background: rgba(15,23,42,.12); }
+.sb-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #f04e23; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.sb-range::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: #f04e23; cursor: pointer; }
+@media (prefers-reduced-motion: reduce) { [style*="sbPageIn"], [style*="sbSheetUp"] { animation: none !important; } }
 
 /* ════════════════════════════════════════════════════════════════════════
    LANDING PAGE — elevated fintech-SaaS surfaces, shadows & scroll reveal
@@ -349,3 +363,6 @@ html.theme-light {
   --sb-illo-line:  rgba(15,23,42,0.16);
   --sb-illo-glow:  rgba(15,23,42,0.05);
 }
+
+/* ── Seller status / stories — progress bar fill ───────────────────────── */
+@keyframes sbStoryBar { from { width: 0%; } to { width: 100%; } }
