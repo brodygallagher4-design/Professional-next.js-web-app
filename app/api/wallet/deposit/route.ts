@@ -61,12 +61,15 @@ export async function POST(req: NextRequest) {
   // Record the pending deposit. `status: "Pending"` keeps it OUT of the wallet
   // balance until the webhook flips it to "Completed". Resilient to a missing
   // `reference` column (falls back to encoding the ref in `means`).
+  // `means` is what the user sees in their history — never the processor name.
+  // At this point the channel (card / bank / mobile money) isn't known yet, so we
+  // show the currency; the webhook refines it to the actual method on success.
   let insErr = (await supabase.from("wallet_transactions").insert({
-    owner_email: email, kind: "deposit", amount: usd, means: `Korapay ${b!.currency} deposit`, status: "Pending", reference,
+    owner_email: email, kind: "deposit", amount: usd, means: `${b!.currency} payment`, status: "Pending", reference,
   })).error;
   if (insErr && /reference|column/i.test(insErr.message)) {
     insErr = (await supabase.from("wallet_transactions").insert({
-      owner_email: email, kind: "deposit", amount: usd, means: `Korapay ${b!.currency} • ${reference}`, status: "Pending",
+      owner_email: email, kind: "deposit", amount: usd, means: `${b!.currency} • ${reference}`, status: "Pending",
     })).error;
   }
   if (insErr) return json({ error: insErr.message }, 500);
