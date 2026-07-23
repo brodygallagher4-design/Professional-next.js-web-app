@@ -677,15 +677,30 @@ export function StatusViewer({ items, sellerName, avatarUrl, isOwner, startIndex
         <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10">
           {avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover"/> : <span className="text-[13px] font-bold text-white">{sellerName.slice(0, 1).toUpperCase()}</span>}
         </span>
-        <span className="flex-1 truncate text-[14px] font-bold text-white">{sellerName}</span>
-        {isOwner && (
-          <button onClick={remove} aria-label="Delete status" className="grid h-8 w-8 place-items-center rounded-full text-white/90 transition hover:bg-white/10">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+        <span className="min-w-0 flex-1 truncate text-[14px] font-bold text-white">{sellerName}</span>
+        <div className="flex items-center gap-0.5">
+          <button onClick={() => setPaused((p) => !p)} aria-label={paused ? "Play" : "Pause"} className="grid h-8 w-8 place-items-center rounded-full text-white/90 transition hover:bg-white/10">
+            {paused
+              ? <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>
+              : <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/></svg>}
           </button>
-        )}
-        <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-full text-white/90 transition hover:bg-white/10">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>
+          {isOwner && (<>
+            <span className="ml-0.5 flex items-center gap-1 text-[13px] font-bold text-white" title="Views" aria-label={`${cur.viewers?.length ?? 0} views`}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              {cur.viewers?.length ?? 0}
+            </span>
+            <span className="ml-1 flex items-center gap-1 text-[13px] font-bold text-white" title="Likes" aria-label={`${cur.reactions?.length ?? 0} likes`}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="#ff5a5f"><path d="M12 21s-7-4.4-9.4-8.9C1.1 9 2.6 5.6 6 5.6c2 0 3.2 1.2 4 2.3.8-1.1 2-2.3 4-2.3 3.4 0 4.9 3.4 3.4 6.5C19 16.6 12 21 12 21Z"/></svg>
+              {cur.reactions?.length ?? 0}
+            </span>
+            <button onClick={remove} aria-label="Delete status" className="ml-0.5 grid h-8 w-8 place-items-center rounded-full text-white/90 transition hover:bg-white/10">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+            </button>
+          </>)}
+          <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-full text-white/90 transition hover:bg-white/10">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
       </div>
       {/* content */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden">

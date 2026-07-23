@@ -58,8 +58,9 @@ export async function POST(req: NextRequest) {
   const miss = dbMissing(); if (miss) return miss;
   const email = await getSessionEmail();
   if (!email) return unauthorized();
-  const { data: prof } = await supabase.from("profiles").select("id, is_seller").eq("email", email).maybeSingle();
-  if (!prof?.is_seller) return json({ error: "Only verified sellers can post a status." }, 403);
+  // Any signed-in member (buyer or seller) can post a story.
+  const { data: prof } = await supabase.from("profiles").select("id").eq("email", email).maybeSingle();
+  if (!prof) return json({ error: "Complete your profile to post a story." }, 403);
 
   // Throttle: at most a handful of stories per minute per seller/IP.
   if (!(await rateLimitDb(`status:${email}:${clientIp(req)}`, 10, 60_000)))

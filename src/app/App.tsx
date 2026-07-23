@@ -2881,7 +2881,7 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
     toast.success("Bio updated.", { title: "Saved" });
     setEditingBio(false);
   };
-  const loadStatus = () => { if (isSeller) fetchMyStatus().then((rows) => setMyStatus(rows ?? [])); };
+  const loadStatus = () => { fetchMyStatus().then((rows) => setMyStatus(rows ?? [])); };
   useEffect(() => { loadStatus(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [isSeller]);
   // Canonical role-based profile URL so navigation + refresh stay consistent
   // (buyers: /account/profile, sellers: /seller/profile) — was always /profile.
@@ -2970,7 +2970,7 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
           {/* Avatar — overlaps cover bottom */}
           <div className="absolute left-4" style={{ bottom: -52 }}>
             <div className="relative">
-              <StatusRing active={isSeller && myStatus.length > 0} size={100} onClick={()=>{ loadStatus(); setViewer(true); }}>
+              <StatusRing active={myStatus.length > 0} size={100} onClick={()=>{ loadStatus(); setViewer(true); }}>
                 <div className="w-[100px] h-[100px] rounded-full flex items-center justify-center overflow-hidden"
                   style={{ background: "#fff", border: "4px solid var(--sb-mbg)" }}>
                   {profile.avatar_url
@@ -2978,8 +2978,8 @@ function ProfilePage({ setPage }: { setPage: (p: Page) => void }) {
                     : <CircleUserIcon size={58} color="#1f2937"/>}
                 </div>
               </StatusRing>
-              {/* Plus — sellers get a menu (photo / status); buyers upload a photo directly */}
-              <button onClick={()=> isSeller ? setStatusMenu(v=>!v) : pickAvatar()} disabled={avatarBusy} aria-label={isSeller ? "Add photo or status" : "Upload profile photo"}
+              {/* Plus — everyone (buyers + sellers) gets the photo / story menu */}
+              <button onClick={()=> setStatusMenu(v=>!v)} disabled={avatarBusy} aria-label="Add photo or story"
                 className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full flex items-center justify-center transition-transform active:scale-90 disabled:opacity-60 z-10"
                 style={{ background: P, border: "2.5px solid var(--sb-mbg)" }}>
                 {avatarBusy
