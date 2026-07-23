@@ -211,8 +211,12 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const tabItems: { id: Tab; label: string }[] = [{ id: "deposit", label: "Deposit History" }, { id: "withdrawal", label: "Withdrawal History" }, { id: "security", label: "Security" }];
   const exchangeRates: Record<string, { symbol: string; rate: number }> = { NGN: { symbol: "₦", rate: 1588 }, GHS: { symbol: "GH₵", rate: 15.4 }, KES: { symbol: "KSh", rate: 129 }, ZAR: { symbol: "R", rate: 18.2 }, XAF: { symbol: "FCFA", rate: 603 }, XOF: { symbol: "CFA", rate: 603 } };
   const parsedAmount = Number.parseFloat(amount);
-  const converted = Number.isFinite(parsedAmount) ? parsedAmount * exchangeRates[currency].rate : 0;
-  const rateLabel = `≈ ${exchangeRates[currency].symbol}${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  // Charge estimate = amount + 5% fee, at the local rate (the server re-computes
+  // this with Korapay's LIVE rate at checkout — this is a close preview).
+  const converted = Number.isFinite(parsedAmount) ? parsedAmount * 1.05 * exchangeRates[currency].rate : 0;
+  const rateLabel = converted > 0
+    ? `You'll be charged ≈ ${exchangeRates[currency].symbol}${converted.toLocaleString(undefined, { maximumFractionDigits: 0 })} (incl. 5% fee)`
+    : `≈ ${exchangeRates[currency].symbol}0`;
   return <div className="min-h-screen text-white" style={{ background: MBG, fontFamily: FONT }}>
     <DesktopTopNav setPage={setPage} active="wallet" />
     <AppMobileHeader className="md:hidden" setPage={setPage}/>

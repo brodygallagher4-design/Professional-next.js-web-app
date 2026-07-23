@@ -7,11 +7,33 @@ import { logger } from "@/server/logger";
 export const dynamic = "force-dynamic";
 
 const KORA_INITIALIZE = "https://api.korapay.com/merchant/api/v1/charges/initialize";
+const KORA_RATES = "https://api.korapay.com/merchant/api/v1/conversions/rates";
 
-// Server-authoritative USD → local-currency rates (the client can never dictate
-// what it's charged). Amounts are in each currency's MAIN unit (Korapay uses
-// naira/cedi/shilling/rand/franc, not subunits).
-const RATES: Record<string, number> = { NGN: 1588, GHS: 15.4, KES: 129, ZAR: 18.2, XOF: 603 };
+// 5% processing markup: a $10 deposit charges the local-currency value of $10.50.
+const FEE_RATE = 0.05;
+
+// Fallback USD → local rates if Korapay's live rate API is briefly unreachable
+// (main unit — naira/cedi/shilling/rand/franc, never subunits). Server-only, so
+// the client can never dictate what it's charged.
+const FALLBACK_RATES: Record<string, number> = { NGN: 1588, GHS: 15.4, KES: 129, ZAR: 18.2, XOF: 603 };
+
+// Convert a USD amount to the local currency at Korapay's LIVE rate, falling back
+// to the static table if the rate call fails. Returns the local charge amount.
+async function convertUsdToLocal(usd: number, currency: string, secret: string, reference: string): Promise<{ amount: number; rate: number; live: boolean }> {
+  try {
+    const res = await fetch(KORA_RATES, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from_currency: "USD", to_currency: currency, amount: usd, reference }),
+    });
+    const j = (await res.json().catch(() => ({}))) as { status?: boolean; data?: { to_amount?: number; rate?: number } };
+    if (res.ok && j?.status && j?.data?.to_amount) {
+      return { amount: Math.max(1, Math.round(Number(j.data.to_amount))), rate: Number(j.data.rate) || 0, live: true };
+    }
+  } catch { /* fall through to static rates */ }
+  const rate = FALLBACK_RATES[currency];
+  return { amount: Math.max(1, Math.round(usd * rate)), rate, live: false };
+}
 
 // Start a wallet deposit: create a PENDING transaction (credited only when the
 // Korapay webhook confirms) and return the hosted checkout URL to redirect to.
@@ -28,9 +50,11 @@ export async function POST(req: NextRequest) {
   if (bad) return bad;
 
   const usd = Math.round(b!.amount * 100) / 100;
-  const rate = RATES[b!.currency];
-  const localAmount = Math.max(1, Math.round(usd * rate));
+  // Add the 5% markup, then convert to the local currency at Korapay's live rate.
+  const usdCharged = Math.round(usd * (1 + FEE_RATE) * 100) / 100; // $10 → $10.50
   const reference = `SB-${crypto.randomUUID()}`;
+  const conv = await convertUsdToLocal(usdCharged, b!.currency, secret, reference);
+  const localAmount = conv.amount;
 
   const { data: prof } = await supabase.from("profiles").select("full_name").eq("email", email).maybeSingle();
 
@@ -50,9 +74,15 @@ export async function POST(req: NextRequest) {
   const proto = (req.headers.get("x-forwarded-proto") ?? "https").split(",")[0].trim();
   const host = req.headers.get("host");
   const base = process.env.APP_URL ?? (host ? `${proto}://${host}` : "");
-  // The webhook lives on THIS app — target its own domain so Korapay always calls
-  // the handler that credits SimBazaar wallets (overridable via env if needed).
+  // Korapay rejects non-public URLs (http / localhost). Only send redirect +
+  // notification URLs when we have a real public https origin (production); on
+  // localhost we omit them so the charge still initializes for UI testing (it
+  // just uses the dashboard-configured webhook). The webhook lives on THIS app.
+  const isPublic = /^https:\/\//.test(base) && !/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(base);
   const webhookUrl = process.env.KORAPAY_WEBHOOK_URL ?? `${base}/api/webhooks/korapay`;
+  const urlFields = isPublic
+    ? { redirect_url: `${base}/wallet?deposit=processing`, notification_url: webhookUrl }
+    : {};
 
   let kora: { status?: boolean; message?: string; data?: { checkout_url?: string; reference?: string } } = {};
   try {
@@ -64,16 +94,15 @@ export async function POST(req: NextRequest) {
         currency: b!.currency,
         reference,
         customer: { email, name: prof?.full_name ?? email.split("@")[0] },
-        redirect_url: `${base}/wallet?deposit=processing`,
-        notification_url: webhookUrl,
-        narration: `SimBazaar wallet top-up ($${usd.toFixed(2)})`,
+        ...urlFields,
+        narration: `SimBazaar wallet top up ${Math.round(usd)} USD`,
         channels: ["card", "bank_transfer", "mobile_money"],
         metadata: { owner_email: email, usd: String(usd) },
       }),
     });
     kora = await res.json().catch(() => ({}));
     if (!res.ok || !kora?.status || !kora?.data?.checkout_url) {
-      logger.error({ reference, status: res.status, message: kora?.message }, "korapay initialize failed");
+      logger.error({ reference, status: res.status, localAmount, currency: b!.currency, koraBody: kora }, "korapay initialize failed");
       // Roll back the pending record so it doesn't linger.
       await supabase.from("wallet_transactions").delete().eq("reference", reference);
       return json({ error: kora?.message ?? "Could not start the payment. Please try again." }, 502);
@@ -84,6 +113,6 @@ export async function POST(req: NextRequest) {
     return json({ error: "Could not reach the payment provider. Please try again." }, 502);
   }
 
-  logger.info({ reference, owner: email, usd, currency: b!.currency, localAmount }, "deposit initialized");
-  return json({ checkout_url: kora.data!.checkout_url, reference });
+  logger.info({ reference, owner: email, usd, usdCharged, currency: b!.currency, localAmount, liveRate: conv.live }, "deposit initialized");
+  return json({ checkout_url: kora.data!.checkout_url, reference, amount_local: localAmount, currency: b!.currency });
 }
