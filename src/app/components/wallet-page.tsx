@@ -97,26 +97,29 @@ function WalletIllustration() {
   );
 }
 
-function TransactionRow({ tx }: { tx: WTx }) {
+function TransactionRow({ tx, onOpen }: { tx: WTx; onOpen: () => void }) {
   const isDeposit = tx.kind === "deposit";
   const statusColor = tx.status === "Completed" ? "#0bcc57" : tx.status === "Pending" ? "#f5a623" : "#ff4053";
-  return <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-[#263448] px-3 py-3 sm:px-4 sm:py-2.5" style={{ background: "var(--sb-fill)" }}>
+  return <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }} className="grid min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-[#263448] px-3 py-3 transition hover:border-[#3a4d68] sm:px-4 sm:py-2.5" style={{ background: "var(--sb-fill)" }}>
     <span className={`flex h-9 w-9 items-center justify-center rounded-full ${isDeposit ? "bg-[#143b25] text-[#00c96b]" : "bg-[#461719] text-[#fc553b]"}`}>
       {isDeposit ? <Download01Icon size={18}/> : <Upload01Icon size={18}/>}
     </span>
     <div className="min-w-0">
       <p className="text-[13px] font-bold text-white">{isDeposit ? "Deposit" : "Withdrawal"}</p>
       <p className="mt-0.5 text-[11px] text-[#8fa9c8]">{tx.means}</p>
-      <button type="button" onClick={async () => { if (await copyText(tx.txid)) toast.success("Transaction ID copied", { title: "Copied" }); else toast.error("Couldn't copy — try again.", { title: "Copy" }); }} title="Copy transaction ID" className="mt-1 flex max-w-full items-center gap-1.5 text-[10px] text-[#557090] transition hover:text-[#9db8d8]">
+      <button type="button" onClick={async (e) => { e.stopPropagation(); if (await copyText(tx.txid)) toast.success("Transaction ID copied", { title: "Copied" }); else toast.error("Couldn't copy — try again.", { title: "Copy" }); }} title="Copy transaction ID" className="mt-1 flex max-w-full items-center gap-1.5 text-[10px] text-[#557090] transition hover:text-[#9db8d8]">
         <span className="truncate">TXID: {tx.txid.length > 16 ? `${tx.txid.slice(0, 13)}…` : tx.txid}</span><Copy01Icon size={13} className="shrink-0"/>
       </button>
     </div>
-    <div className="min-w-[118px] text-right sm:min-w-[165px]">
-      <p className={`text-[15px] font-bold ${isDeposit ? "text-[#00d66c]" : "text-[#ff7a5c]"}`}>{isDeposit ? "+" : "-"}${tx.amount}</p>
-      <p className="mt-1 text-[10px] font-semibold" style={{ color: statusColor }}>
-        <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full" style={{ background: statusColor }}/>{tx.status}
-      </p>
-      <p className="mt-1 hidden text-[9px] text-[#5d7598] sm:block">{tx.date}</p>
+    <div className="flex items-center gap-2">
+      <div className="min-w-[100px] text-right sm:min-w-[150px]">
+        <p className={`text-[15px] font-bold ${isDeposit ? "text-[#00d66c]" : "text-[#ff7a5c]"}`}>{isDeposit ? "+" : "-"}${tx.amount}</p>
+        <p className="mt-1 text-[10px] font-semibold" style={{ color: statusColor }}>
+          <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full" style={{ background: statusColor }}/>{tx.status}
+        </p>
+        <p className="mt-1 hidden text-[9px] text-[#5d7598] sm:block">{tx.date}</p>
+      </div>
+      <ArrowDown01Icon size={16} className="-rotate-90 shrink-0 text-[#5d7598]"/>
     </div>
   </div>;
 }
@@ -244,6 +247,67 @@ function CryptoDeposit({ active }: { active: boolean }) {
   </>;
 }
 
+/* Premium line icons (inline SVG — CSP-safe, crisp on every screen). */
+const IcoCalendar = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 9h18M8 3v3M16 3v3"/></svg>;
+const IcoHash = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M9 3 7 21M17 3l-2 18M4 8h17M3 16h17"/></svg>;
+const IcoTag = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"><path d="M3 6a3 3 0 0 1 3-3h6l9 9-9 9-9-9V6Z"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>;
+const IcoStatus = ({ s = 17, status }: { s?: number; status: string }) => status === "Completed"
+  ? <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
+  : status === "Pending"
+  ? <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>
+  : <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></svg>;
+
+/* Full transaction-details page — opened from a history row. Premium, organized
+   layout: a hero with the amount + status, then an itemised breakdown. */
+function TransactionDetailPage({ tx, onBack, setPage }: { tx: WTx; onBack: () => void; setPage: (page: Page) => void }) {
+  const isDeposit = tx.kind === "deposit";
+  const sc = tx.status === "Completed" ? "#0bcc57" : tx.status === "Pending" ? "#f5a623" : "#ff4053";
+  const copyTxid = async () => { if (await copyText(tx.txid)) toast.success("Transaction ID copied", { title: "Copied" }); else toast.error("Couldn't copy — try again.", { title: "Copy" }); };
+  const StatusPill = () => <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-bold" style={{ background: `${sc}1f`, color: sc }}><IcoStatus s={14} status={tx.status}/>{tx.status}</span>;
+  const rows: { label: string; icon: React.ReactNode; value: React.ReactNode }[] = [
+    { label: "Type", icon: <IcoTag/>, value: isDeposit ? "Deposit" : "Withdrawal" },
+    { label: "Payment method", icon: <BankIcon size={17}/>, value: tx.means },
+    { label: "Status", icon: <IcoStatus status={tx.status}/>, value: <StatusPill/> },
+    { label: "Date & time", icon: <IcoCalendar/>, value: tx.date },
+    { label: "Transaction ID", icon: <IcoHash/>, value: (
+      <button onClick={copyTxid} className="inline-flex max-w-[150px] items-center gap-1.5 transition hover:opacity-80 sm:max-w-[240px]" title="Copy transaction ID">
+        <span className="truncate font-mono text-[12.5px]">{tx.txid}</span><Copy01Icon size={14} className="shrink-0" style={{ color: P }}/>
+      </button>
+    ) },
+  ];
+  return <div className="min-h-screen overflow-x-clip text-white" style={{ background: MBG, fontFamily: FONT }}>
+    <DesktopTopNav setPage={setPage} active="wallet"/>
+    <AppMobileHeader className="md:hidden" setPage={setPage}/>
+    <main className="mx-auto w-full max-w-[600px] px-4 pb-28 pt-6 sm:px-6 md:pt-8">
+      <button onClick={onBack} className="inline-flex items-center gap-2 text-[13.5px] font-semibold transition hover:opacity-80" style={{ color: "var(--sb-chip-text)" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 5-7 7 7 7"/></svg>Back to wallet
+      </button>
+      <h1 className="mt-4 text-[22px] font-bold tracking-[-.03em]">Transaction Details</h1>
+
+      <section className="mt-5 rounded-3xl border p-7 text-center" style={{ background: "var(--sb-card)", borderColor: "var(--sb-bd)" }}>
+        <span className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${isDeposit ? "bg-[#143b25] text-[#00c96b]" : "bg-[#461719] text-[#fc553b]"}`}>
+          {isDeposit ? <Download01Icon size={30}/> : <Upload01Icon size={30}/>}
+        </span>
+        <p className="mt-4 text-[34px] font-bold tracking-[-.03em]" style={{ color: isDeposit ? "#00d66c" : "#ff7a5c" }}>{isDeposit ? "+" : "-"}${tx.amount}</p>
+        <p className="mt-1 text-[13px]" style={{ color: "var(--sb-chip-text)" }}>{isDeposit ? "Deposit to wallet" : "Withdrawal from wallet"}</p>
+        <div className="mt-3 flex justify-center"><StatusPill/></div>
+      </section>
+
+      <section className="mt-4 overflow-hidden rounded-3xl border" style={{ background: "var(--sb-card)", borderColor: "var(--sb-bd)" }}>
+        {rows.map((r, i) => <div key={r.label} className="flex items-center justify-between gap-3 px-4 py-3.5" style={i ? { borderTop: "1px solid var(--sb-bd)" } : undefined}>
+          <span className="flex items-center gap-2.5 text-[13px]" style={{ color: "var(--sb-chip-text)" }}>{r.icon}{r.label}</span>
+          <span className="text-right text-[13.5px] font-semibold">{r.value}</span>
+        </div>)}
+      </section>
+
+      <div className="mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3.5" style={{ background: "rgba(13,204,104,0.08)", borderColor: "rgba(13,204,104,0.4)" }}>
+        <span className="mt-0.5 shrink-0"><ProtectedShield size={20}/></span>
+        <p className="text-[12px] leading-[1.5]" style={{ color: "var(--sb-chip-text)" }}>This transaction is secured and recorded on your account. Keep your Transaction ID for any support enquiry.</p>
+      </div>
+    </main>
+  </div>;
+}
+
 export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const [tab, setTab] = useState<Tab>("deposit");
   const [showAllTx, setShowAllTx] = useState(false);
@@ -272,6 +336,8 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   }, []);
   // Deposits/withdrawals are disabled until the payment provider is integrated.
   const [comingSoon, setComingSoon] = useState("");
+  // Selected history row → opens the full transaction-details page.
+  const [detailTx, setDetailTx] = useState<WTx | null>(null);
   // Premium role-based URL: buyers get /account/wallet, sellers /seller/wallet
   useEffect(() => {
     try {
@@ -335,7 +401,8 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   // with Korapay's live rate at checkout — this is a close on-screen preview.
   const converted = Number.isFinite(parsedAmount) ? parsedAmount * 1.05 * exchangeRates[currency].rate : 0;
   const rateLabel = `≈ ${exchangeRates[currency].symbol}${converted.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-  return <div className="min-h-screen text-white" style={{ background: MBG, fontFamily: FONT }}>
+  if (detailTx) return <TransactionDetailPage tx={detailTx} onBack={() => setDetailTx(null)} setPage={setPage}/>;
+  return <div className="min-h-screen overflow-x-clip text-white" style={{ background: MBG, fontFamily: FONT }}>
     <DesktopTopNav setPage={setPage} active="wallet" />
     <AppMobileHeader className="md:hidden" setPage={setPage}/>
     <main className="mx-auto w-full max-w-[760px] px-4 pb-28 pt-7 sm:px-6 md:px-8 md:pt-9">
@@ -343,7 +410,7 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
       <section className="relative mt-6 min-h-[158px] overflow-hidden rounded-[20px] bg-[linear-gradient(105deg,#ff4f2b_0%,#ff6340_53%,#ee7768_100%)] px-7 py-6 shadow-[0_18px_40px_rgba(240,78,35,.16)] sm:px-7"><div className="absolute inset-0 bg-[radial-gradient(ellipse_75%_100%_at_18%_45%,rgba(255,255,255,.14),transparent_66%)]"/><div className="relative z-10"><p className="text-[12px] font-medium text-white">Account balance</p><div className="mt-2 flex items-center gap-2">{!balLoaded ? <Skeleton className="h-[30px] w-32" style={{ background: "rgba(255,255,255,.35)" }}/> : <span className="text-[26px] font-bold tracking-[-.035em]">{showBalance ? `$${balance.toFixed(2)}` : "$••••"}</span>}<button onClick={() => setShowBalance((value) => !value)} aria-label="Toggle balance visibility" className="rounded p-1 text-white/90 hover:bg-white/10">{showBalance ? <ViewIcon size={17}/> : <ViewOffIcon size={17}/>}</button></div><div className="mt-4 flex items-center gap-2.5"><button onClick={() => setFunding(true)} className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-semibold text-[#f04e23] transition hover:bg-[#fff5f2] active:scale-95"><Download01Icon size={16}/>Deposit</button>{seller && <button onClick={() => setWithdrawing(true)} className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-semibold text-[#f04e23] transition hover:bg-[#fff5f2] active:scale-95"><Upload01Icon size={16}/>Withdraw</button>}</div></div><div className="pointer-events-none absolute right-4 top-1/2 z-10 -translate-y-1/2 sm:right-6"><WalletIllustration /></div></section>
       <section className="mt-5 flex items-start gap-3 rounded-[18px] bg-[#173b25] px-5 py-3"><span className="mt-0.5 shrink-0"><ProtectedShield /></span><div><h2 className="text-[14px] font-bold">Funds Protected</h2><p className="mt-1 text-[11px] text-white">Merchant earnings are held securely and released only after successful transaction completion.</p></div></section>
       <section className="mt-5 grid grid-cols-2 rounded-[18px] px-3 py-3 sm:px-4" style={{ background: "var(--sb-fill)" }}><div className="flex min-w-0 items-center gap-4 border-r border-[#28374b] px-1 py-1 sm:px-2"><span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#123e28] text-[#00cd69]"><Download01Icon size={22}/></span><div><p className="text-[12px] font-semibold">Total Deposit</p><p className="text-[15px] font-bold">${totalDeposited.toFixed(2)}</p><p className="text-[11px] text-[#a9c0db]">All time</p></div></div><div className="flex min-w-0 items-center gap-4 px-3 py-1 sm:px-5"><span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#461719] text-[#fc553b]"><Upload01Icon size={22}/></span><div><p className="text-[12px] font-semibold">Total Withdrawal</p><p className="text-[15px] font-bold">${totalWithdrawn.toFixed(2)}</p><p className="text-[11px] text-[#a9c0db]">All time</p></div></div></section>
-      <section className="mt-6"><div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><span className="sb-glow" aria-hidden="true"/><div className="relative flex gap-5 border-b border-[#263448]">{tabItems.map((item) => <button onClick={() => setTab(item.id)} key={item.id} className={`relative pb-3 text-[13px] font-semibold ${tab === item.id ? "text-[#f04e23]" : "text-white"}`}>{item.label}{tab === item.id && <span className="absolute inset-x-0 bottom-[-1px] h-px bg-[#f04e23]"/>}</button>)}</div><button onClick={() => setNotice(true)} className="relative hidden rounded-lg bg-[#f04e23] px-5 py-2.5 text-[13px] font-bold transition hover:bg-[#ff623a] active:scale-95 sm:block sm:self-auto">Report Transaction</button></div>{tab === "security" ? <div className="mt-4 rounded-2xl border border-[#263448] p-7 text-center" style={{ background: "var(--sb-fill)" }}><ProtectedShield size={34}/><h3 className="mt-3 text-[16px] font-bold">Wallet security</h3><p className="mx-auto mt-2 max-w-sm text-[13px] leading-5 text-[#91a7c5]">Your wallet is protected with secured transaction processing and merchant escrow safeguards.</p></div> : !txLoaded ? <div className="mt-4 space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-3 rounded-2xl px-4 py-3.5" style={{ background: "var(--sb-fill)" }}><Skeleton className="h-10 w-10" rounded="rounded-full"/><div className="flex-1 space-y-2"><Skeleton className="h-3 w-2/5"/><Skeleton className="h-2.5 w-1/4"/></div><Skeleton className="h-4 w-16"/></div>)}</div> : <div className="mt-4 space-y-2.5">{(tab === "withdrawal" ? withdrawalsList : deposits).slice(0, showAllTx ? undefined : 4).map((tx) => <TransactionRow key={tx.id} tx={tx}/>)}</div>}<button onClick={() => setShowAllTx(v => !v)} className="mx-auto mt-5 flex items-center gap-1 text-[12px] font-semibold text-[#f04e23]">{showAllTx ? "Show less" : "View all transaction"} <ArrowDown01Icon size={14} className={showAllTx ? "rotate-180" : ""}/></button></section>
+      <section className="mt-6"><div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><span className="sb-glow" aria-hidden="true"/><div className="relative flex gap-5 border-b border-[#263448]">{tabItems.map((item) => <button onClick={() => setTab(item.id)} key={item.id} className={`relative pb-3 text-[13px] font-semibold ${tab === item.id ? "text-[#f04e23]" : "text-white"}`}>{item.label}{tab === item.id && <span className="absolute inset-x-0 bottom-[-1px] h-px bg-[#f04e23]"/>}</button>)}</div><button onClick={() => setNotice(true)} className="relative hidden rounded-lg bg-[#f04e23] px-5 py-2.5 text-[13px] font-bold transition hover:bg-[#ff623a] active:scale-95 sm:block sm:self-auto">Report Transaction</button></div>{tab === "security" ? <div className="mt-4 rounded-2xl border border-[#263448] p-7 text-center" style={{ background: "var(--sb-fill)" }}><ProtectedShield size={34}/><h3 className="mt-3 text-[16px] font-bold">Wallet security</h3><p className="mx-auto mt-2 max-w-sm text-[13px] leading-5 text-[#91a7c5]">Your wallet is protected with secured transaction processing and merchant escrow safeguards.</p></div> : !txLoaded ? <div className="mt-4 space-y-2.5">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-3 rounded-2xl px-4 py-3.5" style={{ background: "var(--sb-fill)" }}><Skeleton className="h-10 w-10" rounded="rounded-full"/><div className="flex-1 space-y-2"><Skeleton className="h-3 w-2/5"/><Skeleton className="h-2.5 w-1/4"/></div><Skeleton className="h-4 w-16"/></div>)}</div> : <div className="mt-4 space-y-2.5">{(tab === "withdrawal" ? withdrawalsList : deposits).slice(0, showAllTx ? undefined : 4).map((tx) => <TransactionRow key={tx.id} tx={tx} onOpen={() => setDetailTx(tx)}/>)}</div>}<button onClick={() => setShowAllTx(v => !v)} className="mx-auto mt-5 flex items-center gap-1 text-[12px] font-semibold text-[#f04e23]">{showAllTx ? "Show less" : "View all transaction"} <ArrowDown01Icon size={14} className={showAllTx ? "rotate-180" : ""}/></button></section>
     </main>
     <button onClick={() => setPage("support")} aria-label="Open support" className="fixed bottom-6 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[#f04e23] text-white shadow-[0_12px_28px_rgba(0,0,0,.35)] transition hover:scale-105 active:scale-95">?</button>
     {withdrawing && seller && (
