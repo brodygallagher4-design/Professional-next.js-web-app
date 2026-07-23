@@ -251,7 +251,7 @@ export const addCartItem = (item: { title: string; description?: string; brand: 
 export const removeCartItem = async (id: number): Promise<boolean> => {
   try { return (await fetch(`/api/cart/${id}`, { method: "DELETE" })).ok; } catch { return false; }
 };
-export interface ApiWalletTx { id: number; kind: "deposit" | "withdrawal"; amount: number; means: string; status: string; txid: string; created_at: string; }
+export interface ApiWalletTx { id: number; kind: "deposit" | "withdrawal"; amount: number; means: string; status: string; txid: string | null; reference: string | null; created_at: string; }
 export const fetchWalletTransactions = () => get<ApiWalletTx[]>("/api/wallet/transactions");
 export const createWalletTransaction = async (tx: { kind: "deposit" | "withdrawal"; amount: number; means: string }): Promise<ApiWalletTx | null> => {
   try {

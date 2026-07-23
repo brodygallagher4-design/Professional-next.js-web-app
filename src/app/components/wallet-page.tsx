@@ -27,15 +27,11 @@ const mapTx = (r: ApiWalletTx): WTx => ({
   amount: Number(r.amount).toFixed(2),
   means: r.means,
   status: r.status,
-  txid: r.txid + "...",
+  // The real, copyable transaction id: the Korapay charge reference, falling back
+  // to any stored txid, then the row id. Never a placeholder.
+  txid: r.reference || r.txid || `SB-${r.id}`,
   date: formatTxDate(r.created_at),
 });
-
-const FALLBACK_LEDGER: WTx[] = [
-  { id: "f1", kind: "deposit", amount: "10.00", means: "From bank", status: "Failed", txid: "ad0b6efc...", date: "Sunday, October 26th, 3:48 AM" },
-  { id: "f2", kind: "deposit", amount: "20.00", means: "From bank", status: "Completed", txid: "3f3a7339...", date: "Tuesday, October 8th, 7:59 AM" },
-  { id: "f3", kind: "withdrawal", amount: "15.00", means: "To bank", status: "Completed", txid: "wd4e1b9b...", date: "Monday, October 7th, 11:30 AM" },
-];
 
 /* Wallet-with-money mark (thin outline wallet + banknote + coin) */
 function WalletMoneyIcon({ size = 22, color = "#ff5a37" }: { size?: number; color?: string }) {
@@ -109,7 +105,9 @@ function TransactionRow({ tx }: { tx: WTx }) {
     <div className="min-w-0">
       <p className="text-[13px] font-bold text-white">{isDeposit ? "Deposit" : "Withdrawal"}</p>
       <p className="mt-0.5 text-[11px] text-[#8fa9c8]">{tx.means}</p>
-      <p className="mt-1 flex items-center gap-1.5 truncate text-[10px] text-[#557090]">TXID: {tx.txid}<Copy01Icon size={13} className="shrink-0"/></p>
+      <button type="button" onClick={async () => { if (await copyText(tx.txid)) toast.success("Transaction ID copied", { title: "Copied" }); else toast.error("Couldn't copy — try again.", { title: "Copy" }); }} title="Copy transaction ID" className="mt-1 flex max-w-full items-center gap-1.5 text-[10px] text-[#557090] transition hover:text-[#9db8d8]">
+        <span className="truncate">TXID: {tx.txid.length > 16 ? `${tx.txid.slice(0, 13)}…` : tx.txid}</span><Copy01Icon size={13} className="shrink-0"/>
+      </button>
     </div>
     <div className="min-w-[118px] text-right sm:min-w-[165px]">
       <p className={`text-[15px] font-bold ${isDeposit ? "text-[#00d66c]" : "text-[#ff7a5c]"}`}>{isDeposit ? "+" : "-"}${tx.amount}</p>
