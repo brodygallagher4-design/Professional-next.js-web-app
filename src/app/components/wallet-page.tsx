@@ -181,7 +181,7 @@ function CryptoDeposit({ active }: { active: boolean }) {
     const r = await createCryptoWallet(pickAsset);
     setCreating(false);
     if (!r.ok || !r.wallet) { toast.error(r.error ?? "Could not create the wallet.", { title: "Crypto wallet" }); return; }
-    await invalidate([qk.cryptoWallets]);
+    await invalidate([[...qk.cryptoWallets]]);
     toast.success("Static wallet created successfully", { title: "Crypto" });
     setSelectedId(r.wallet.asset); setPickAsset(null); setMode("list");
   };

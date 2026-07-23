@@ -50,9 +50,9 @@ export async function POST(req: NextRequest) {
   const callbackUrl = process.env.HELEKET_WEBHOOK_URL ?? (isPublic ? `${base}/api/webhooks/heleket` : undefined);
 
   const created = await createStaticWallet({ currency: meta.currency, network: meta.network, orderId, callbackUrl });
-  if (!created.ok) {
+  if (!created.ok || !created.wallet) {
     logger.error({ owner: email, asset: meta.id, status: created.status }, "heleket wallet create failed");
-    return json({ error: created.error }, created.status);
+    return json({ error: created.error ?? "Could not create the wallet. Please try again." }, created.status ?? 502);
   }
 
   const row = {

@@ -37,11 +37,13 @@ export function verifyHeleketWebhook(body: Record<string, unknown>, apiKey: stri
 export interface HeleketWallet { address: string; uuid: string; network: string; currency: string; url?: string; }
 
 // Create (or fetch) a static wallet for a currency/network. `orderId` ties the
-// wallet to our user so webhooks can be attributed. Returns a flat result shape
-// so callers can branch on `.ok` without discriminated-union narrowing.
+// wallet to our user so webhooks can be attributed. Returns a FLAT result shape
+// (not a discriminated union) so callers can read `.error`/`.status` under this
+// project's `strict: false` without union narrowing failing.
+export interface CreateWalletResult { ok: boolean; wallet?: HeleketWallet; error?: string; status?: number }
 export async function createStaticWallet(params: {
   currency: string; network: string; orderId: string; callbackUrl?: string;
-}): Promise<{ ok: true; wallet: HeleketWallet } | { ok: false; error: string; status: number }> {
+}): Promise<CreateWalletResult> {
   const merchant = process.env.HELEKET_MERCHANT_ID;
   const apiKey = process.env.HELEKET_API_KEY;
   if (!merchant || !apiKey) return { ok: false, error: "Crypto payments aren't configured yet.", status: 503 };
