@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import QRCodeSVG from "react-qr-code";
 import { ArrowDown01Icon, ArrowLeft01Icon, ArrowRight01Icon, BankIcon, Calendar03Icon, Cancel01Icon, CancelCircleIcon, CheckmarkCircle02Icon, Clock01Icon, Copy01Icon, CustomerSupportIcon, DiscountTag01Icon, Download01Icon, HashtagIcon, Upload01Icon, ViewIcon, ViewOffIcon, Wallet01Icon } from "hugeicons-react";
 import { DesktopTopNav, FONT, AppMobileHeader, P, MBG, useProfile, useScrollLock, Skeleton, useLoadGate } from "../shared";
-import { fetchWalletTransactions, startDeposit, createCryptoWallet, readCache, writeCache, type ApiWalletTx, type CryptoWallet } from "../lib/api";
+import { fetchWalletTransactions, startDeposit, createCryptoWallet, reconcileDeposits, readCache, writeCache, type ApiWalletTx, type CryptoWallet } from "../lib/api";
 import { useWalletBalanceQuery, useCryptoWalletsQuery, useInvalidate, qk } from "../lib/query";
 import { CRYPTO_ASSETS } from "@/server/schemas";
 import { toast } from "../toast";
@@ -353,11 +353,18 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   useEffect(() => { if (balFetched) finishBal(); }, [balFetched, finishBal]);
   useEffect(() => {
     let cancelled = false;
-    fetchWalletTransactions().then((rows) => {
+    const load = async () => {
+      const rows = await fetchWalletTransactions().catch(() => null);
       if (cancelled) return;
       if (rows) { const mapped = rows.map(mapTx); writeCache("sb-wallet-tx", mapped); setLedger(mapped); }
+    };
+    (async () => {
+      await load();          // show current history fast
       finishTx();
-    }).catch(() => { if (!cancelled) finishTx(); });
+      // Then reconcile pending deposits with Korapay and refresh if any changed,
+      // so statuses reflect the real payment outcome instead of a stuck "Pending".
+      try { const r = await reconcileDeposits(); if (!cancelled && r.updated > 0) await load(); } catch { /* best-effort */ }
+    })();
     return () => { cancelled = true; };
   }, []);
   // Deposits/withdrawals are disabled until the payment provider is integrated.
@@ -377,13 +384,16 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
       if (window.location.pathname + window.location.search !== url) window.history.replaceState({}, "", url);
     } catch { /* ignore */ }
   }, [seller, detailTx]);
-  // Restore the details view from ?tx= after a refresh, once the ledger has loaded.
+  // Restore the details view from ?tx= after a refresh — once the fetch has
+  // settled (txLoaded), whether or not the ledger has any rows. Gating on
+  // `txLoaded` (not `ledger.length`) means an unknown/empty id resolves too,
+  // so we never get stuck on the loading screen.
   useEffect(() => {
-    if (!pendingTxId || !ledger.length) return;
+    if (!pendingTxId || !txLoaded) return;
     const found = ledger.find((t) => String(t.id) === pendingTxId);
     if (found) setDetailTx(found);
     setPendingTxId(null);
-  }, [ledger, pendingTxId]);
+  }, [txLoaded, ledger, pendingTxId]);
   const deposits = ledger.filter(t => t.kind === "deposit");
   const withdrawalsList = ledger.filter(t => t.kind === "withdrawal");
   const totalDeposited = deposits.filter(t => t.status === "Completed").reduce((s, t) => s + Number(t.amount), 0);
@@ -441,6 +451,15 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const converted = Number.isFinite(parsedAmount) ? parsedAmount * 1.05 * exchangeRates[currency].rate : 0;
   const rateLabel = `≈ ${exchangeRates[currency].symbol}${converted.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   if (detailTx) return <TransactionDetailPage tx={detailTx} onBack={() => setDetailTx(null)} setPage={setPage}/>;
+  // Restoring a details view from ?tx= after a refresh — show a brief loader
+  // instead of flashing the wallet page before the transaction resolves.
+  if (pendingTxId) return <div className="flex min-h-screen flex-col overflow-x-clip text-white" style={{ background: MBG, fontFamily: FONT }}>
+    <DesktopTopNav setPage={setPage} active="wallet"/>
+    <AppMobileHeader className="md:hidden" setPage={setPage}/>
+    <div className="flex flex-1 items-center justify-center">
+      <svg className="animate-spin" width="26" height="26" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity=".2" strokeWidth="2.6"/><path d="M21 12a9 9 0 0 0-9-9" stroke={P} strokeWidth="2.6" strokeLinecap="round"/></svg>
+    </div>
+  </div>;
   return <div className="min-h-screen overflow-x-clip text-white" style={{ background: MBG, fontFamily: FONT }}>
     <DesktopTopNav setPage={setPage} active="wallet" />
     <AppMobileHeader className="md:hidden" setPage={setPage}/>

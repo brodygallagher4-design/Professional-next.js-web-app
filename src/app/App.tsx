@@ -1317,24 +1317,18 @@ function PurchaseTabFilled({ color }: { color:string }) {
   );
 }
 
-function WalletTabFilled({ color }: { color:string }) {
+/* Wallet tab — flaticon fi_482541 (wallet with a card + coin). Colour-driven
+   active state; same mark for filled/outline so the tab reads consistently. */
+function WalletTabFiIcon({ color }: { color:string }) {
   return (
-    <svg width="24" height="22" viewBox="0 0 24 22" fill="none">
-      <path d="M5 1l3 3H1l4-3Z" fill={color}/>
-      <path fillRule="evenodd" clipRule="evenodd" d="M3.5 4A2.5 2.5 0 0 0 1 6.5v10A2.5 2.5 0 0 0 3.5 19h17a2.5 2.5 0 0 0 2.5-2.5v-10A2.5 2.5 0 0 0 20.5 4h-17ZM18 14.85a1.35 1.35 0 1 0 0-2.7 1.35 1.35 0 0 0 0 2.7Z" fill={color}/>
+    <svg width="23" height="23" viewBox="0 0 469.341 469.341" fill={color} aria-hidden="true">
+      <path d="M448.004,236.639v-65.965c0-22.368-17.35-40.559-39.271-42.323l-61.26-107c-5.677-9.896-14.844-16.969-25.813-19.906c-10.917-2.917-22.333-1.385-32.104,4.302L79.553,128.007H42.67c-23.531,0-42.667,19.135-42.667,42.667v256c0,23.531,19.135,42.667,42.667,42.667h362.667c23.531,0,42.667-19.135,42.667-42.667v-65.965c12.389-4.418,21.333-16.147,21.333-30.035v-64C469.337,252.786,460.393,241.057,448.004,236.639z M383.944,128.007h-92.971l69.729-40.596L383.944,128.007z M350.103,68.898l-101.529,59.109h-42.113l133.112-77.5L350.103,68.898z M300.295,24.184c4.823-2.823,10.458-3.573,15.844-2.135c5.448,1.458,9.99,4.979,12.813,9.906l0.022,0.039l-164.91,96.013h-42.111L300.295,24.184z M426.67,426.674c0,11.76-9.573,21.333-21.333,21.333H42.67c-11.76,0-21.333-9.573-21.333-21.333v-256c0-11.76,9.573-21.333,21.333-21.333h362.667c11.76,0,21.333,9.573,21.333,21.333v64h-64c-35.292,0-64,28.708-64,64c0,35.292,28.708,64,64,64h64V426.674z M448.004,330.674c0,5.885-4.781,10.667-10.667,10.667H362.67c-23.531,0-42.667-19.135-42.667-42.667c0-23.531,19.135-42.667,42.667-42.667h74.667c5.885,0,10.667,4.781,10.667,10.667V330.674z"/>
+      <path d="M362.67,277.341c-11.76,0-21.333,9.573-21.333,21.333c0,11.76,9.573,21.333,21.333,21.333c11.76,0,21.333-9.573,21.333-21.333C384.004,286.914,374.431,277.341,362.67,277.341z"/>
     </svg>
   );
 }
-
-function WalletTabOutline({ color }: { color:string }) {
-  return (
-    <svg width="24" height="22" viewBox="0 0 24 22" fill="none">
-      <path d="M5.2 1.3 7.9 4H2l3.2-2.7Z" stroke={color} strokeWidth="1.5" strokeLinejoin="round"/>
-      <rect x="1.8" y="4.8" width="20.4" height="13.4" rx="2.1" stroke={color} strokeWidth="1.6"/>
-      <circle cx="18" cy="11.5" r="1.35" fill={color}/>
-    </svg>
-  );
-}
+function WalletTabFilled({ color }: { color:string }) { return <WalletTabFiIcon color={color}/>; }
+function WalletTabOutline({ color }: { color:string }) { return <WalletTabFiIcon color={color}/>; }
 
 function HomeTabOutline({ color }: { color:string }) {
   return (

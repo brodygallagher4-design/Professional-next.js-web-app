@@ -272,6 +272,16 @@ export const activateSeller = async (): Promise<ActivateResult> => {
 };
 export const fetchWalletBalance = () => get<{ balance: number; merchant_fee: number }>("/api/wallet/balance");
 
+// Reconcile pending deposits against Korapay so history reflects the real payment
+// status (Completed/Failed) instead of a stuck "Pending". Returns how many changed.
+export const reconcileDeposits = async (): Promise<{ updated: number }> => {
+  try {
+    const res = await fetch("/api/wallet/reconcile", { method: "POST", headers: { "Content-Type": "application/json" } });
+    const j = (await res.json().catch(() => ({}))) as { updated?: number };
+    return { updated: Number(j?.updated ?? 0) };
+  } catch { return { updated: 0 }; }
+};
+
 // Start a Korapay wallet top-up: sends the USD amount + local currency, gets back
 // the hosted checkout URL to redirect the buyer to.
 export interface DepositResult { ok: boolean; checkout_url?: string; error?: string }
