@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import QRCodeSVG from "react-qr-code";
-import { ArrowDown01Icon, BankIcon, Cancel01Icon, Copy01Icon, Download01Icon, Upload01Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
+import { ArrowDown01Icon, ArrowLeft01Icon, ArrowRight01Icon, BankIcon, Calendar03Icon, Cancel01Icon, CancelCircleIcon, CheckmarkCircle02Icon, Clock01Icon, Copy01Icon, CustomerSupportIcon, DiscountTag01Icon, Download01Icon, HashtagIcon, Upload01Icon, ViewIcon, ViewOffIcon, Wallet01Icon } from "hugeicons-react";
 import { DesktopTopNav, FONT, AppMobileHeader, P, MBG, useProfile, useScrollLock, Skeleton, useLoadGate } from "../shared";
 import { fetchWalletTransactions, startDeposit, createCryptoWallet, readCache, writeCache, type ApiWalletTx, type CryptoWallet } from "../lib/api";
 import { useWalletBalanceQuery, useCryptoWalletsQuery, useInvalidate, qk } from "../lib/query";
@@ -247,40 +247,43 @@ function CryptoDeposit({ active }: { active: boolean }) {
   </>;
 }
 
-/* Premium line icons (inline SVG — CSP-safe, crisp on every screen). */
-const IcoCalendar = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 9h18M8 3v3M16 3v3"/></svg>;
-const IcoHash = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M9 3 7 21M17 3l-2 18M4 8h17M3 16h17"/></svg>;
-const IcoTag = ({ s = 17 }: { s?: number }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"><path d="M3 6a3 3 0 0 1 3-3h6l9 9-9 9-9-9V6Z"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>;
-const IcoStatus = ({ s = 17, status }: { s?: number; status: string }) => status === "Completed"
-  ? <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
-  : status === "Pending"
-  ? <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>
-  : <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></svg>;
-
 /* Full transaction-details page — opened from a history row. Premium, organized
-   layout: a hero with the amount + status, then an itemised breakdown. */
+   layout: hero (amount + status), itemised breakdown, status timeline, and a
+   support action. Uses the app's hugeicons set for a consistent icon language. */
 function TransactionDetailPage({ tx, onBack, setPage }: { tx: WTx; onBack: () => void; setPage: (page: Page) => void }) {
   const isDeposit = tx.kind === "deposit";
-  const sc = tx.status === "Completed" ? "#0bcc57" : tx.status === "Pending" ? "#f5a623" : "#ff4053";
+  const done = tx.status === "Completed";
+  const failed = tx.status === "Failed";
+  const sc = done ? "#0bcc57" : tx.status === "Pending" ? "#f5a623" : "#ff4053";
   const copyTxid = async () => { if (await copyText(tx.txid)) toast.success("Transaction ID copied", { title: "Copied" }); else toast.error("Couldn't copy — try again.", { title: "Copy" }); };
-  const StatusPill = () => <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-bold" style={{ background: `${sc}1f`, color: sc }}><IcoStatus s={14} status={tx.status}/>{tx.status}</span>;
+  const StatusIco = ({ size = 17 }: { size?: number }) => done ? <CheckmarkCircle02Icon size={size}/> : failed ? <CancelCircleIcon size={size}/> : <Clock01Icon size={size}/>;
+  const StatusPill = () => <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-bold" style={{ background: `${sc}22`, color: sc }}><StatusIco size={14}/>{tx.status}</span>;
   const rows: { label: string; icon: React.ReactNode; value: React.ReactNode }[] = [
-    { label: "Type", icon: <IcoTag/>, value: isDeposit ? "Deposit" : "Withdrawal" },
-    { label: "Payment method", icon: <BankIcon size={17}/>, value: tx.means },
-    { label: "Status", icon: <IcoStatus status={tx.status}/>, value: <StatusPill/> },
-    { label: "Date & time", icon: <IcoCalendar/>, value: tx.date },
-    { label: "Transaction ID", icon: <IcoHash/>, value: (
+    { label: "Type", icon: <DiscountTag01Icon size={17}/>, value: isDeposit ? "Deposit" : "Withdrawal" },
+    { label: "Payment method", icon: <Wallet01Icon size={17}/>, value: tx.means },
+    { label: "Status", icon: <StatusIco/>, value: <StatusPill/> },
+    { label: "Date & time", icon: <Calendar03Icon size={17}/>, value: tx.date },
+    { label: "Transaction ID", icon: <HashtagIcon size={17}/>, value: (
       <button onClick={copyTxid} className="inline-flex max-w-[150px] items-center gap-1.5 transition hover:opacity-80 sm:max-w-[240px]" title="Copy transaction ID">
         <span className="truncate font-mono text-[12.5px]">{tx.txid}</span><Copy01Icon size={14} className="shrink-0" style={{ color: P }}/>
       </button>
     ) },
   ];
+  // 3-step status journey. States: done (green) · active (orange, in progress) ·
+  // pending (grey, not reached) · failed (red).
+  type StepState = "done" | "active" | "pending" | "failed";
+  const timeline: { title: string; desc: string; state: StepState }[] = [
+    { title: "Initiated", desc: `${isDeposit ? "Deposit" : "Withdrawal"} request created`, state: "done" },
+    { title: "Processing", desc: "Confirming with the payment provider", state: done ? "done" : failed ? "failed" : "active" },
+    { title: failed ? "Failed" : "Completed", desc: failed ? "This transaction could not be processed" : done ? (isDeposit ? "Funds credited to your wallet" : "Funds sent successfully") : "Awaiting final confirmation", state: done ? "done" : failed ? "pending" : "pending" },
+  ];
+  const stepColor = (s: StepState) => s === "done" ? "#0bcc57" : s === "active" ? "#f5a623" : s === "failed" ? "#ff4053" : "var(--sb-chip-text)";
   return <div className="min-h-screen overflow-x-clip text-white" style={{ background: MBG, fontFamily: FONT }}>
     <DesktopTopNav setPage={setPage} active="wallet"/>
     <AppMobileHeader className="md:hidden" setPage={setPage}/>
     <main className="mx-auto w-full max-w-[600px] px-4 pb-28 pt-6 sm:px-6 md:pt-8">
-      <button onClick={onBack} className="inline-flex items-center gap-2 text-[13.5px] font-semibold transition hover:opacity-80" style={{ color: "var(--sb-chip-text)" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 5-7 7 7 7"/></svg>Back to wallet
+      <button onClick={onBack} className="inline-flex items-center gap-1.5 text-[13.5px] font-semibold transition hover:opacity-80" style={{ color: "var(--sb-chip-text)" }}>
+        <ArrowLeft01Icon size={18}/>Back to wallet
       </button>
       <h1 className="mt-4 text-[22px] font-bold tracking-[-.03em]">Transaction Details</h1>
 
@@ -299,6 +302,29 @@ function TransactionDetailPage({ tx, onBack, setPage }: { tx: WTx; onBack: () =>
           <span className="text-right text-[13.5px] font-semibold">{r.value}</span>
         </div>)}
       </section>
+
+      <section className="mt-4 rounded-3xl border p-5" style={{ background: "var(--sb-card)", borderColor: "var(--sb-bd)" }}>
+        <h3 className="text-[13px] font-bold" style={{ color: "var(--sb-chip-text)" }}>Status timeline</h3>
+        <ol className="mt-3.5">
+          {timeline.map((step, i) => { const col = stepColor(step.state); const last = i === timeline.length - 1; return <li key={step.title} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full" style={{ background: step.state === "pending" ? "var(--sb-chip)" : `${col === "var(--sb-chip-text)" ? "#8892a0" : col}22`, color: col }}>
+                {step.state === "done" ? <CheckmarkCircle02Icon size={16}/> : step.state === "failed" ? <CancelCircleIcon size={16}/> : step.state === "active" ? <Clock01Icon size={16}/> : <span className="h-2 w-2 rounded-full" style={{ background: "currentColor" }}/>}
+              </span>
+              {!last && <span className="my-1 w-px flex-1" style={{ background: "var(--sb-bd)" }}/>}
+            </div>
+            <div className={last ? "" : "pb-4"}>
+              <p className="text-[13.5px] font-semibold" style={step.state === "pending" ? { color: "var(--sb-chip-text)" } : undefined}>{step.title}</p>
+              <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}>{step.desc}</p>
+            </div>
+          </li>; })}
+        </ol>
+      </section>
+
+      <button onClick={() => setPage("support")} className="mt-4 flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition hover:opacity-90" style={{ background: "var(--sb-card)", borderColor: "var(--sb-bd)" }}>
+        <span className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full" style={{ background: "rgba(240,78,35,0.12)", color: P }}><CustomerSupportIcon size={19}/></span><span><span className="block text-[13.5px] font-semibold">Report a problem</span><span className="block text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}>Get help with this transaction</span></span></span>
+        <ArrowRight01Icon size={18} style={{ color: "var(--sb-chip-text)" }}/>
+      </button>
 
       <div className="mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3.5" style={{ background: "rgba(13,204,104,0.08)", borderColor: "rgba(13,204,104,0.4)" }}>
         <span className="mt-0.5 shrink-0"><ProtectedShield size={20}/></span>
@@ -338,13 +364,26 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   const [comingSoon, setComingSoon] = useState("");
   // Selected history row → opens the full transaction-details page.
   const [detailTx, setDetailTx] = useState<WTx | null>(null);
+  // Capture ?tx= from the URL once at first render (before the role-based URL
+  // effect normalises the path) so a refresh can restore the details view.
+  const [pendingTxId, setPendingTxId] = useState<string | null>(() => {
+    try { return typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tx") : null; } catch { return null; }
+  });
   // Premium role-based URL: buyers get /account/wallet, sellers /seller/wallet
   useEffect(() => {
     try {
-      const url = seller ? "/seller/wallet" : "/account/wallet";
-      if (window.location.pathname !== url) window.history.replaceState({}, "", url);
+      const base = seller ? "/seller/wallet" : "/account/wallet";
+      const url = detailTx ? `${base}?tx=${encodeURIComponent(String(detailTx.id))}` : base;
+      if (window.location.pathname + window.location.search !== url) window.history.replaceState({}, "", url);
     } catch { /* ignore */ }
-  }, [seller]);
+  }, [seller, detailTx]);
+  // Restore the details view from ?tx= after a refresh, once the ledger has loaded.
+  useEffect(() => {
+    if (!pendingTxId || !ledger.length) return;
+    const found = ledger.find((t) => String(t.id) === pendingTxId);
+    if (found) setDetailTx(found);
+    setPendingTxId(null);
+  }, [ledger, pendingTxId]);
   const deposits = ledger.filter(t => t.kind === "deposit");
   const withdrawalsList = ledger.filter(t => t.kind === "withdrawal");
   const totalDeposited = deposits.filter(t => t.status === "Completed").reduce((s, t) => s + Number(t.amount), 0);
