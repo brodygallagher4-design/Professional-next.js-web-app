@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { supabase, getSessionEmail, json, dbMissing, unauthorized } from "@/server/api";
+import { supabase, getSessionEmail, json, dbMissing, unauthorized, assertSameOrigin, parseBody, rateLimitDb, clientIp } from "@/server/api";
+import { statusSchema } from "@/server/schemas";
 
 export const dynamic = "force-dynamic";
 
@@ -53,16 +54,22 @@ export async function GET(req: NextRequest) {
 // POST — create a status. Sellers only. Accepts an image/video (base64 data URL)
 // or a text status. Media is uploaded to the public `status` bucket.
 export async function POST(req: NextRequest) {
+  const csrf = assertSameOrigin(req); if (csrf) return csrf;
   const miss = dbMissing(); if (miss) return miss;
   const email = await getSessionEmail();
   if (!email) return unauthorized();
   const { data: prof } = await supabase.from("profiles").select("id, is_seller").eq("email", email).maybeSingle();
   if (!prof?.is_seller) return json({ error: "Only verified sellers can post a status." }, 403);
 
-  const body = await req.json().catch(() => ({} as Record<string, unknown>));
-  const kindIn = String(body.kind ?? "");
-  const caption = String(body.caption ?? "").trim().slice(0, 300);
-  const bg = String(body.bg ?? "").trim().slice(0, 40);
+  // Throttle: at most a handful of stories per minute per seller/IP.
+  if (!(await rateLimitDb(`status:${email}:${clientIp(req)}`, 10, 60_000)))
+    return json({ error: "You're posting too fast — please wait a moment." }, 429);
+
+  const { data: b, bad } = await parseBody(req, statusSchema);
+  if (bad) return bad;
+  const kindIn = b!.kind;
+  const caption = b!.caption ?? "";
+  const bg = b!.bg ?? "";
 
   if (kindIn === "text") {
     if (!caption) return json({ error: "Write something for your text status." }, 400);
@@ -73,7 +80,7 @@ export async function POST(req: NextRequest) {
   }
 
   // image / video
-  const dataUrl = String(body.media ?? "");
+  const dataUrl = String(b!.media ?? "");
   const match = /^data:([-\w/.]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
   if (!match) return json({ error: "Attach a valid image or video." }, 400);
   const [, mime, b64] = match;

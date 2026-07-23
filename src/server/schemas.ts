@@ -54,6 +54,23 @@ export const CRYPTO_ASSETS: CryptoAsset[] = [
 export const CRYPTO_ASSET_IDS = CRYPTO_ASSETS.map((a) => a.id) as [string, ...string[]];
 export const createWalletSchema = z.object({ asset: z.enum(CRYPTO_ASSET_IDS) });
 
+// ─── Seller story / status ───────────────────────────────────────────────────
+// Strip control + zero-width characters and clamp length so stored captions are
+// clean, safe text (React escapes on render; this removes invisible/abuse chars).
+const cleanText = (max: number) =>
+  z.string().max(max + 2000).optional().transform((s) => (s ?? "")
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, "")
+    .trim().slice(0, max));
+// A background is only ever a hex colour we control — reject anything else so no
+// arbitrary CSS/URL can be stored and re-rendered.
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{3,8}$/).optional();
+export const statusSchema = z.object({
+  kind: z.enum(["image", "video", "text"]),
+  media: z.string().max(24_000_000).optional(), // data URL; byte size re-checked server-side
+  caption: cleanText(300),
+  bg: hexColor,
+});
+
 export const adSchema = z.object({
   title: z.string().trim().min(1, "A title is required.").max(200),
   brand: shortText(40).default("whatsapp"),

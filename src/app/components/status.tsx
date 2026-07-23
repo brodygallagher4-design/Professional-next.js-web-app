@@ -70,12 +70,24 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
   const [busy, setBusy] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageW, setStageW] = useState(REF_W);
+  // Full-screen text entry — keeps the input above the mobile keyboard so typing
+  // actually works (a bottom-sheet textarea gets covered by the keyboard).
+  const [editing, setEditing] = useState<{ id: string; isNew: boolean } | null>(null);
+  const [draft, setDraft] = useState("");
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
   useScrollLock(open);
 
   // Reset when closed.
   useEffect(() => {
-    if (!open) { setBg({ kind: "grad", ...GRADS[0] }); setEls([]); setSel(null); setPanel("none"); setBusy(false); }
+    if (!open) { setBg({ kind: "grad", ...GRADS[0] }); setEls([]); setSel(null); setPanel("none"); setBusy(false); setEditing(null); setDraft(""); }
   }, [open]);
+
+  // Reliably focus the text field when the editor opens (mobile needs the .focus()).
+  useEffect(() => {
+    if (!editing) return;
+    const t = setTimeout(() => { taRef.current?.focus(); }, 60);
+    return () => clearTimeout(t);
+  }, [editing]);
 
   // Measure the stage so preview text sizes track the published raster exactly.
   useEffect(() => {
@@ -95,8 +107,22 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
   // ── Add elements ──────────────────────────────────────────────────────────
   const addText = () => {
     const id = uid();
-    setEls((prev) => [...prev, { id, type: "text", xPct: 50, yPct: 45, rot: 0, text: "Tap to edit", font: FONTS[0].css, size: 28, color: "#ffffff", variant: "plain" }]);
-    setSel(id); setPanel("text");
+    setEls((prev) => [...prev, { id, type: "text", xPct: 50, yPct: 45, rot: 0, text: "", font: FONTS[0].css, size: 28, color: "#ffffff", variant: "plain" }]);
+    setSel(id); setPanel("none");
+    setDraft(""); setEditing({ id, isNew: true });
+  };
+  // Open the full-screen editor to change an existing text element's content.
+  const editText = (el: TextEl) => { setSel(el.id); setPanel("none"); setDraft(el.text); setEditing({ id: el.id, isNew: false }); };
+  const commitText = () => {
+    if (!editing) return;
+    const t = draft.replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, "").slice(0, 200);
+    if (!t.trim()) setEls((prev) => prev.filter((e) => e.id !== editing.id));
+    else patch(editing.id, { text: t });
+    setEditing(null); setDraft("");
+  };
+  const cancelText = () => {
+    if (editing?.isNew) setEls((prev) => prev.filter((e) => e.id !== editing.id));
+    setEditing(null); setDraft("");
   };
   const addImage = () => {
     const input = document.createElement("input");
@@ -235,6 +261,31 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div className="fixed inset-0 z-[120] flex flex-col" style={{ background: "var(--sb-mbg)", fontFamily: FONT, animation: "sbPageIn .22s cubic-bezier(.22,1,.36,1) both" }}>
+      {/* Full-screen text entry — sits above the keyboard so typing always works */}
+      {editing && (() => {
+        const el = els.find((e) => e.id === editing.id);
+        const font = el?.type === "text" ? el.font : FONTS[0].css;
+        const color = el?.type === "text" ? el.color : "#ffffff";
+        return (
+          <div className="absolute inset-0 z-30 flex flex-col" style={{ background: bgCss(bg) }}>
+            <div className="flex items-center justify-between px-4 py-3">
+              <button onClick={cancelText} className="rounded-full px-4 py-1.5 text-[14px] font-semibold text-white/90 transition hover:bg-white/10">Cancel</button>
+              <button onClick={commitText} className="rounded-full px-6 py-2 text-[14px] font-bold text-white shadow-[0_6px_18px_rgba(0,0,0,.3)] transition active:scale-95" style={{ background: P }}>Done</button>
+            </div>
+            <div className="flex flex-1 items-start justify-center px-6 pt-[9vh]">
+              <textarea ref={taRef} value={draft} onChange={(e) => setDraft(e.target.value.slice(0, 200))} maxLength={200} rows={3}
+                placeholder="Type something…" className="w-full resize-none bg-transparent text-center outline-none placeholder:text-white/45"
+                style={{ fontFamily: font, color, fontSize: 32, fontWeight: 700, lineHeight: 1.25, textShadow: "0 1px 10px rgba(0,0,0,.22)" }}/>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2.5 px-4 pb-8 pt-2">
+              {TEXT_COLORS.map((c) => (
+                <button key={c} onClick={() => patch(editing.id, { color: c })} aria-label="Text colour" className="h-8 w-8 rounded-full transition-transform active:scale-90"
+                  style={{ background: c, border: c === "#ffffff" ? "1px solid rgba(0,0,0,.15)" : "none", outline: color === c ? "2px solid #fff" : "none", outlineOffset: 2 }}/>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <button onClick={onClose} aria-label="Close" className="grid h-9 w-9 place-items-center rounded-full text-white transition hover:bg-white/10">
@@ -277,7 +328,7 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
             else if (el.variant === "bg") { tStyle.background = el.color; tStyle.color = isDark(el.color) ? "#fff" : "#111"; tStyle.padding = `${fs * 0.16}px ${fs * 0.34}px`; tStyle.borderRadius = fs * 0.22; }
             else { tStyle.color = el.color; tStyle.WebkitTextStroke = `${Math.max(1, fs * 0.045)}px ${isDark(el.color) ? "#fff" : "#111"}`; }
             return (
-              <div key={el.id} onPointerDown={(e) => onElPointerDown(e, el)} style={common}>
+              <div key={el.id} onPointerDown={(e) => onElPointerDown(e, el)} onDoubleClick={() => editText(el)} style={common}>
                 <span style={tStyle}>{el.text || " "}</span>
               </div>
             );
@@ -308,8 +359,10 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
       {/* ── Text style panel ── */}
       {panel === "text" && selEl?.type === "text" && (
         <Sheet title="Text style" onClose={() => setPanel("none")}>
-          <textarea value={selEl.text} onChange={(e) => patch(selEl.id, { text: e.target.value.slice(0, 200) })} rows={2} placeholder="Tap to edit"
-            className="mb-3 w-full resize-none rounded-xl px-3.5 py-2.5 text-[14px] text-white outline-none placeholder:text-gray-500" style={{ background: "var(--sb-fill)", border: "1px solid var(--sb-mbd)" }}/>
+          <button onClick={() => editText(selEl)} className="mb-3 flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-left transition hover:opacity-90" style={{ background: "var(--sb-fill)", border: "1px solid var(--sb-mbd)" }}>
+            <span className="min-w-0 flex-1 truncate text-[14px] text-white">{selEl.text || "Tap to type your text"}</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={P} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="ml-2 shrink-0"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+          </button>
           <label className="mb-1 block text-[12px] font-semibold sb-muted">Font</label>
           <select value={selEl.font} onChange={(e) => patch(selEl.id, { font: e.target.value })} className="mb-3 w-full rounded-xl px-3.5 py-2.5 text-[14px] text-white outline-none" style={{ background: "var(--sb-fill)", border: "1px solid var(--sb-mbd)" }}>
             {FONTS.map((f) => <option key={f.label} value={f.css} style={{ background: "var(--sb-mcard)" }}>{f.label}</option>)}
@@ -358,8 +411,11 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
         <ToolBtn disabled={!sel} onClick={() => layer(-1)} label="Send back">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
         </ToolBtn>
-        <ToolBtn disabled={!selEl || selEl.type !== "text"} onClick={() => setPanel("text")} label="Edit text">
+        <ToolBtn disabled={!selEl || selEl.type !== "text"} onClick={() => { if (selEl?.type === "text") editText(selEl); }} label="Edit text">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+        </ToolBtn>
+        <ToolBtn disabled={!selEl || selEl.type !== "text"} onClick={() => setPanel("text")} label="Text style">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="12" r="2.5"/><circle cx="8.5" cy="7.5" r="2.5"/><circle cx="6.5" cy="13" r="2.5"/><path d="M12 22a10 10 0 1 1 0-20c4.5 0 8 2.5 8 6 0 2-1.5 3-3 3h-2c-1 0-1.5.7-1.5 1.5S13 17 13 18a2 2 0 0 1-1 4z"/></svg>
         </ToolBtn>
         <ToolBtn disabled={!sel} onClick={removeSel} label="Delete">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
