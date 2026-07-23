@@ -1787,9 +1787,9 @@ function PromoPanelSuiteCard() {
 
 function PromoDesktop({ setPage }: { setPage?: (p: Page) => void }) {
   const cards = [
-    <PromoSpotlightCard onVisit={() => openSpotlightStore(setPage, "gold")}/>,
-    <PromoPanelSuiteCard/>,
-    <PromoPrinceCard onVisit={() => openSpotlightStore(setPage, "prince")}/>,
+    <PromoSpotlightCard key="gold" onVisit={() => openSpotlightStore(setPage, "gold")}/>,
+    <PromoPanelSuiteCard key="panelsuite"/>,
+    <PromoPrinceCard key="prince" onVisit={() => openSpotlightStore(setPage, "prince")}/>,
   ];
   // Number of "pages" when sliding two cards into view at a time.
   const pages = cards.length - 1; // 0..pages-1
@@ -4636,7 +4636,7 @@ function MerchantPage({ setPage, paid, onPaid, onSubmit }: { setPage:(p:Page)=>v
             <div className="max-w-[560px] mx-auto">
               <h2 className="text-white text-center mb-2" style={{ fontSize:24, fontWeight:800 }}>Account Credentials</h2>
               <p className="text-gray-400 text-[13px] text-center mb-6">
-                You're listing <span className="font-bold" style={{ color:P }}>{qty}</span> {qty>1?"accounts":"account"}. Add credentials for {qty>1?"each one":"it"} below — securely stored and only released to the buyer after purchase.
+                You&apos;re listing <span className="font-bold" style={{ color:P }}>{qty}</span> {qty>1?"accounts":"account"}. Add credentials for {qty>1?"each one":"it"} below — securely stored and only released to the buyer after purchase.
               </p>
 
               <div className="flex flex-col gap-5">
