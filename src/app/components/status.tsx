@@ -53,6 +53,7 @@ const FONTS = [
   { label: "Rounded", css: "'Trebuchet MS', system-ui, sans-serif" },
 ];
 const TEXT_COLORS = ["#ffffff", "#000000", "#f04e23", "#db2777", "#eab308", "#22c55e", "#2563eb", "#7c3aed"];
+const EMOJIS = ["😀", "😂", "😍", "🥳", "😎", "🤑", "🔥", "✨", "⭐", "💯", "👍", "👏", "🙌", "💪", "🎉", "🎁", "❤️", "💜", "💰", "💵", "💎", "🛒", "🏷️", "✅", "⚡", "🚀", "📢", "🤝", "👑", "🥇", "😮", "😭"];
 
 const bgCss = (b: BgFill) => (b.kind === "solid" ? b.color : `linear-gradient(${b.angle}deg, ${b.from}, ${b.to})`);
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -66,7 +67,7 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
   const [bg, setBg] = useState<BgFill>({ kind: "grad", ...GRADS[0] });
   const [els, setEls] = useState<El[]>([]);
   const [sel, setSel] = useState<string | null>(null);
-  const [panel, setPanel] = useState<"none" | "bg" | "text">("none");
+  const [panel, setPanel] = useState<"none" | "bg" | "text" | "emoji">("none");
   const [busy, setBusy] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageW, setStageW] = useState(REF_W);
@@ -110,6 +111,12 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
     setEls((prev) => [...prev, { id, type: "text", xPct: 50, yPct: 45, rot: 0, text: "", font: FONTS[0].css, size: 28, color: "#ffffff", variant: "plain" }]);
     setSel(id); setPanel("none");
     setDraft(""); setEditing({ id, isNew: true });
+  };
+  // Emoji sticker → a text element (rasterises natively, scales/rotates like text).
+  const addEmoji = (emo: string) => {
+    const id = uid();
+    setEls((prev) => [...prev, { id, type: "text", xPct: 50, yPct: 45, rot: 0, text: emo, font: FONTS[0].css, size: 46, color: "#ffffff", variant: "plain" }]);
+    setSel(id); setPanel("none");
   };
   // Open the full-screen editor to change an existing text element's content.
   const editText = (el: TextEl) => { setSel(el.id); setPanel("none"); setDraft(el.text); setEditing({ id: el.id, isNew: false }); };
@@ -156,23 +163,57 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
     });
   };
 
-  // ── Dragging (pointer) ─────────────────────────────────────────────────────
-  const drag = useRef<{ id: string; startX: number; startY: number; ox: number; oy: number } | null>(null);
+  // ── Gestures: one finger drags · two fingers pinch-scale + rotate ───────────
+  type Gesture = { id: string; pts: Map<number, { x: number; y: number }>; ox: number; oy: number; sx: number; sy: number; baseDist: number; baseAng: number; baseSize: number; baseW: number; baseRot: number };
+  const gest = useRef<Gesture | null>(null);
+  const setTwoFingerBase = (g: Gesture) => {
+    const pv = [...g.pts.values()]; if (pv.length < 2) return;
+    const [a, b] = pv;
+    g.baseDist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    g.baseAng = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+    const el = els.find((e) => e.id === g.id);
+    g.baseSize = el?.type === "text" ? el.size : 0;
+    g.baseW = el?.type === "image" ? el.wPct : 0;
+    g.baseRot = el?.rot ?? 0;
+  };
   const onElPointerDown = (e: React.PointerEvent, el: El) => {
     e.stopPropagation();
     setSel(el.id);
-    const rect = stageRef.current?.getBoundingClientRect(); if (!rect) return;
-    drag.current = { id: el.id, startX: e.clientX, startY: e.clientY, ox: el.xPct, oy: el.yPct };
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (!gest.current || gest.current.id !== el.id) {
+      gest.current = { id: el.id, pts: new Map(), ox: el.xPct, oy: el.yPct, sx: e.clientX, sy: e.clientY, baseDist: 0, baseAng: 0, baseSize: 0, baseW: 0, baseRot: 0 };
+    }
+    gest.current.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gest.current.pts.size === 2) setTwoFingerBase(gest.current);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   };
   const onStagePointerMove = (e: React.PointerEvent) => {
-    const d = drag.current; if (!d) return;
+    const g = gest.current; if (!g || !g.pts.has(e.pointerId)) return;
+    g.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const rect = stageRef.current?.getBoundingClientRect(); if (!rect) return;
-    const dx = ((e.clientX - d.startX) / rect.width) * 100;
-    const dy = ((e.clientY - d.startY) / rect.height) * 100;
-    patch(d.id, { xPct: Math.max(2, Math.min(98, d.ox + dx)), yPct: Math.max(3, Math.min(97, d.oy + dy)) });
+    if (g.pts.size >= 2) {
+      const [a, b] = [...g.pts.values()];
+      const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const ang = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+      const scale = dist / (g.baseDist || 1);
+      const rot = Math.round(g.baseRot + (ang - g.baseAng));
+      const el = els.find((x) => x.id === g.id);
+      if (el?.type === "text") patch(g.id, { size: Math.max(12, Math.min(120, Math.round(g.baseSize * scale))), rot });
+      else if (el?.type === "image") patch(g.id, { wPct: Math.max(12, Math.min(100, g.baseW * scale)), rot });
+    } else {
+      const dx = ((e.clientX - g.sx) / rect.width) * 100;
+      const dy = ((e.clientY - g.sy) / rect.height) * 100;
+      patch(g.id, { xPct: Math.max(2, Math.min(98, g.ox + dx)), yPct: Math.max(3, Math.min(97, g.oy + dy)) });
+    }
   };
-  const onStagePointerUp = () => { drag.current = null; };
+  const onStagePointerUp = (e: React.PointerEvent) => {
+    const g = gest.current; if (!g) return;
+    g.pts.delete(e.pointerId);
+    if (g.pts.size === 0) { gest.current = null; return; }
+    // Dropped 2→1: rebase the drag origin to the remaining finger so it doesn't jump.
+    const el = els.find((x) => x.id === g.id);
+    const [p] = [...g.pts.values()];
+    g.sx = p.x; g.sy = p.y; g.ox = el?.xPct ?? g.ox; g.oy = el?.yPct ?? g.oy;
+  };
 
   // ── Publish: rasterise stage → JPEG → post as an image status ──────────────
   const gradientLine = (angleDeg: number, W: number, H: number) => {
@@ -356,6 +397,17 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
         </Sheet>
       )}
 
+      {/* ── Sticker (emoji) panel ── */}
+      {panel === "emoji" && (
+        <Sheet title="Stickers" onClose={() => setPanel("none")}>
+          <div className="grid grid-cols-8 gap-1.5">
+            {EMOJIS.map((emo) => (
+              <button key={emo} onClick={() => addEmoji(emo)} aria-label="Add sticker" className="grid h-10 place-items-center rounded-lg text-[24px] leading-none transition hover:bg-white/10 active:scale-90">{emo}</button>
+            ))}
+          </div>
+        </Sheet>
+      )}
+
       {/* ── Text style panel ── */}
       {panel === "text" && selEl?.type === "text" && (
         <Sheet title="Text style" onClose={() => setPanel("none")}>
@@ -402,6 +454,9 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
         <ToolBtn onClick={addText} label="Add text">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>
         </ToolBtn>
+        <ToolBtn active={panel === "emoji"} onClick={() => setPanel((p) => (p === "emoji" ? "none" : "emoji"))} label="Stickers">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
+        </ToolBtn>
 
         <span className="mx-0.5 h-7 w-px shrink-0" style={{ background: "var(--sb-mbd)" }}/>
 
@@ -421,7 +476,7 @@ export function StatusComposer({ open, onClose, onPosted }: { open: boolean; onC
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
         </ToolBtn>
       </div>
-      <p className="pb-3 text-center text-[11px] sb-muted">Stories expire after 24 hours.</p>
+      <p className="pb-3 text-center text-[11px] sb-muted">Drag to move · pinch to resize &amp; rotate · double-tap text to edit · stories expire after 24 hours.</p>
     </div>,
     document.body,
   );
