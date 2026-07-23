@@ -13,7 +13,7 @@ import {
   P, BG, BG2, CARD, CARD2, BD, FONT, MBG, MCARD, MCARD2, MBD,
   BRAND_LOGOS, BrandIcon, DesktopTopNav, AppMobileHeader, Brand3D,
   ThemeContext, useTheme, setStoreMerchant, setCurrentOrder, useProfile, AppMenuButton, clearProfileCache, refreshProfile, CircleUserIcon, CartLineIcon,
-  useAuthed, setAuthedState, isAuthed, EmptyMegaphone, useCartCount, Spinner, useScrollLock, Skeleton, useLoadGate, VerifiedBadge,
+  useAuthed, setAuthedState, isAuthed, EmptyMegaphone, useCartCount, Spinner, useScrollLock, Skeleton, useLoadGate, VerifiedBadge, SupportChatIcon,
 } from "./shared";
 import type { Page, BrandKey } from "./shared";
 import {
@@ -1389,16 +1389,6 @@ function BottomTabBar({ active, setPage, setView }: { active:string; setPage:(p:
 
 // ─── SHARED TOPBAR COMPONENTS ─────────────────────────────────────────────────
 
-function HeadphonesIco({ size=20, color="#9ca3af" }: { size?:number; color?:string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
-      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
-      <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
-    </svg>
-  );
-}
-
 function AppLogo({ onPress }: { onPress?:()=>void }) {
   return (
     <button onClick={onPress} className="flex items-center gap-2.5 flex-1 min-w-0">
@@ -1413,9 +1403,9 @@ function TopBarRight({ setPage, cartCount }: { setPage:(p:Page)=>void; cartCount
   const count = cartCount ?? liveCount;
   return (
     <div className="flex items-center gap-1 shrink-0">
-      <button onClick={() => setPage("support")}
+      <button onClick={() => setPage("support")} aria-label="Support"
         className="w-9 h-9 flex items-center justify-center rounded-full transition-colors hover:bg-white/5 active:bg-white/10">
-        <HeadphonesIco size={19} color="#9ca3af"/>
+        <SupportChatIcon size={20} color="#9ca3af"/>
       </button>
       <div className="w-px h-5 rounded-full mx-0.5" style={{ background: "rgba(255,255,255,0.12)" }}/>
       <button onClick={() => setPage("cart")}

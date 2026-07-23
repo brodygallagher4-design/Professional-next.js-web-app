@@ -4,7 +4,7 @@ import { useState, useEffect, useId, useRef, useCallback, createContext, useCont
 import { fetchProfile, fetchAuthSession, authLogout, fetchCart, readCache, writeCache, type ApiProfile } from "./lib/api";
 import {
   ShoppingBag01Icon, ShoppingCart01Icon, Notification01Icon, ArrowLeft01Icon,
-  CustomerService01Icon, Menu01Icon, UserIcon,
+  Menu01Icon, UserIcon,
 } from "hugeicons-react";
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
@@ -318,6 +318,20 @@ export function Brand3D({ size = 34 }: { size?: number }) {
 }
 
 // ─── SHARED NAVIGATION ───────────────────────────────────────────────────────────
+/* Support icon — flaticon fi_2951105 (headset with a chat bubble). Filled mark,
+   colour-driven; shared by the top nav bar and the slide-out drawer. */
+export function SupportChatIcon({ size = 22, color = "currentColor" }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill={color} aria-hidden="true">
+      <path d="m59.506 27.903c-.245-6.981-3.072-13.509-8.036-18.473-5.203-5.204-12.118-8.069-19.47-8.069-14.849 0-26.982 11.819-27.505 26.542-2.266 1.007-3.852 3.275-3.852 5.911v7.262c0 3.566 2.901 6.468 6.468 6.468 2.308 0 4.185-1.877 4.185-4.185v-11.829c0-2.167-1.662-3.934-3.775-4.144.78-12.827 11.458-23.025 24.479-23.025 6.552 0 12.713 2.554 17.35 7.191 4.258 4.258 6.75 9.808 7.125 15.835-2.111.212-3.77 1.978-3.77 4.143v11.828c0 2.185 1.688 3.963 3.826 4.148v2.989c0 3.366-2.739 6.104-6.105 6.104h-4.521c-.222-.634-.57-1.22-1.058-1.706-.855-.859-1.995-1.332-3.209-1.332h-4.66c-.669 0-1.311.142-1.899.416-1.604.737-2.64 2.355-2.64 4.122 0 1.214.473 2.354 1.33 3.207.857.859 1.997 1.332 3.209 1.332h4.66c1.932 0 3.635-1.249 4.27-3.039h4.518c5.021 0 9.105-4.084 9.105-9.104v-3.523c2.252-1.013 3.826-3.273 3.826-5.898v-7.262c0-2.634-1.586-4.902-3.851-5.909zm-51.211 3.627v11.828c0 .653-.531 1.185-1.185 1.185-1.912 0-3.468-1.556-3.468-3.468v-7.262c0-1.913 1.556-3.468 3.468-3.468.654 0 1.185.532 1.185 1.185zm34.848 26.891c-.149.706-.783 1.219-1.506 1.219h-4.66c-.41 0-.795-.16-1.089-.454-.29-.289-.45-.675-.45-1.085 0-.599.351-1.146.901-1.399.196-.092.411-.139.638-.139h4.66c.41 0 .795.159 1.088.453.29.289.45.675.45 1.085.001.11-.011.22-.032.32zm17.214-17.346c0 1.912-1.556 3.468-3.468 3.468-.653 0-1.185-.531-1.185-1.185v-11.828c0-.653.531-1.185 1.185-1.185 1.912 0 3.468 1.556 3.468 3.468z"/>
+      <path d="m41.713 41.592c3.505 0 6.356-2.852 6.356-6.356v-12.951c0-1.694-.662-3.29-1.864-4.492s-2.797-1.864-4.492-1.864h-19.426c-3.505 0-6.356 2.851-6.356 6.356v12.951c0 3.505 2.851 6.356 6.356 6.356h.119v3.356c0 1.28.763 2.416 1.943 2.895.381.153.777.229 1.169.229.817 0 1.613-.324 2.196-.927l5.583-5.553zm-10.091-2.564-6.042 6.009c-.027.028-.047.049-.104.024-.069-.028-.069-.073-.069-.113v-4.856c0-.828-.671-1.5-1.5-1.5h-1.619c-1.851 0-3.356-1.506-3.356-3.356v-12.951c0-1.851 1.505-3.356 3.356-3.356h19.426c.894 0 1.735.35 2.371.985.636.636.985 1.478.985 2.371v12.951c0 1.851-1.506 3.356-3.356 3.356h-9.034c-.397 0-.777.157-1.058.436z"/>
+      <path d="m24.713 26.787c-1.22 0-2.213.994-2.213 2.213s.994 2.213 2.213 2.213c1.221 0 2.215-.994 2.215-2.213s-.993-2.213-2.215-2.213z"/>
+      <path d="m31.999 26.787c-1.22 0-2.213.994-2.213 2.213s.994 2.213 2.213 2.213c1.222 0 2.215-.994 2.215-2.213s-.993-2.213-2.215-2.213z"/>
+      <path d="m39.285 26.787c-1.22 0-2.213.994-2.213 2.213s.994 2.213 2.213 2.213c1.221 0 2.215-.994 2.215-2.213s-.994-2.213-2.215-2.213z"/>
+    </svg>
+  );
+}
+
 export function DesktopTopNav({ setPage, active }: { setPage:(p:Page)=>void; active:Page }) {
   const [userOpen, setUserOpen] = useState(false);
   const profile = useProfile();
@@ -509,7 +523,7 @@ function SideDrawer({ open, onClose, setPage }: { open:boolean; onClose:()=>void
   const menuItems = [
     { label: "Referral", page: "referral" as Page, icon: <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="7" r="3.1"/><circle cx="5.3" cy="9" r="2.4"/><circle cx="18.7" cy="9" r="2.4"/><path d="M12 11.4c-2.9 0-5.4 2.1-5.8 5-.1.7.4 1.3 1.1 1.3h9.4c.7 0 1.2-.6 1.1-1.3-.4-2.9-2.9-5-5.8-5Z"/><path d="M5.3 12.4c-2 0-3.8 1.4-4.2 3.4-.1.6.3 1.1.9 1.1H4c.2-1.9 1-3.5 2.3-4.7-.3-.1-.6-.2-1-.2Z"/><path d="M18.7 12.4c-.4 0-.7.1-1 .2 1.3 1.2 2.1 2.8 2.3 4.7h2c.6 0 1-.5.9-1.1-.4-2-2.2-3.4-4.2-3.4Z"/></svg> },
     { label: "Account settings", page: "settings" as Page, icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08A1.7 1.7 0 0 0 8.96 19.4a1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.96a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.08A1.7 1.7 0 0 0 15.04 4.6a1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9v.04A1.7 1.7 0 0 0 20.96 10H21a2 2 0 0 1 0 4h-.04A1.7 1.7 0 0 0 19.4 15Z"/></svg> },
-    { label: "Support", page: "support" as Page, icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13a7 7 0 0 1 14 0"/><path d="M6.5 13.5H5.5A2.5 2.5 0 0 0 3 16v1a2.5 2.5 0 0 0 2.5 2.5H6a.5.5 0 0 0 .5-.5v-5a.5.5 0 0 0-.5-.5Z"/><path d="M17.5 13.5h1A2.5 2.5 0 0 1 21 16v1a2.5 2.5 0 0 1-2.5 2.5H18a.5.5 0 0 1-.5-.5v-5a.5.5 0 0 1 .5-.5Z"/><path d="M18 19.5v.5a2.5 2.5 0 0 1-2.5 2.5H13.5"/></svg> },
+    { label: "Support", page: "support" as Page, icon: <SupportChatIcon size={19}/> },
   ];
 
   return (
@@ -753,7 +767,7 @@ export function AppMobileHeader({ setPage, cartCount, menuSlot, className = "" }
         <span className="truncate text-[20px] font-medium tracking-[-0.02em] text-white">SimBazaar</span>
       </button>
       <div className="ml-2 flex items-center gap-2">
-        <button onClick={() => setPage("support")} aria-label="Support" className="grid h-9 w-8 place-items-center text-white transition active:scale-90"><CustomerService01Icon size={23} strokeWidth={1.8}/></button>
+        <button onClick={() => setPage("support")} aria-label="Support" className="grid h-9 w-8 place-items-center text-white transition active:scale-90"><SupportChatIcon size={23}/></button>
         <span className="h-6 w-px bg-white/[0.14]"/>
         <button onClick={() => setPage("cart")} aria-label="Cart" className="relative grid h-9 w-8 place-items-center text-white transition active:scale-90"><CartLineIcon size={23}/>{count > 0 && <span className="absolute -right-0.5 -top-0.5 grid h-[16px] min-w-[16px] place-items-center rounded-full px-1 text-[9px] font-bold text-white" style={{ background: P }}>{count}</span>}</button>
         <button onClick={() => setPage("notifications")} aria-label="Notifications" className="grid h-9 w-7 place-items-center text-white transition active:scale-90"><Notification01Icon size={23} strokeWidth={1.8}/></button>
