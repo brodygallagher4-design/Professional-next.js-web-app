@@ -33,6 +33,27 @@ export const depositSchema = z.object({
   currency: z.enum(DEPOSIT_CURRENCIES),
 });
 
+// ─── Crypto static wallets (Heleket) ─────────────────────────────────────────
+// The catalog of assets a user can generate a static deposit wallet for. `id` is
+// the stable key used everywhere (URL-safe); `currency`/`network` are Heleket's
+// codes; `label`/`color`/`symbol` drive the UI. Single source of truth shared by
+// the client grid and the server create endpoint.
+export interface CryptoAsset { id: string; currency: string; network: string; label: string; color: string; symbol: string; }
+export const CRYPTO_ASSETS: CryptoAsset[] = [
+  { id: "btc",         currency: "BTC",  network: "btc",     label: "BTC",          color: "#f7931a", symbol: "₿" },
+  { id: "eth",         currency: "ETH",  network: "eth",     label: "ETH",          color: "#627eea", symbol: "♦" },
+  { id: "ltc",         currency: "LTC",  network: "ltc",     label: "LTC",          color: "#345dbe", symbol: "Ł" },
+  { id: "usdt-trc20",  currency: "USDT", network: "tron",    label: "USDT (TRC20)", color: "#26a17b", symbol: "₮" },
+  { id: "usdt-bep20",  currency: "USDT", network: "bsc",     label: "USDT (BEP20)", color: "#26a17b", symbol: "₮" },
+  { id: "bnb",         currency: "BNB",  network: "bsc",     label: "BNB",          color: "#f3ba2f", symbol: "◆" },
+  { id: "trx",         currency: "TRX",  network: "tron",    label: "TRX",          color: "#ef0027", symbol: "▾" },
+  { id: "usdt-erc20",  currency: "USDT", network: "eth",     label: "USDT (ERC20)", color: "#26a17b", symbol: "₮" },
+  { id: "usdc-bep20",  currency: "USDC", network: "bsc",     label: "USDC (BEP20)", color: "#2775ca", symbol: "$" },
+  { id: "usdc-erc20",  currency: "USDC", network: "eth",     label: "USDC (ERC20)", color: "#2775ca", symbol: "$" },
+];
+export const CRYPTO_ASSET_IDS = CRYPTO_ASSETS.map((a) => a.id) as [string, ...string[]];
+export const createWalletSchema = z.object({ asset: z.enum(CRYPTO_ASSET_IDS) });
+
 export const adSchema = z.object({
   title: z.string().trim().min(1, "A title is required.").max(200),
   brand: shortText(40).default("whatsapp"),

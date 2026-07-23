@@ -13,8 +13,8 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import type { ReactNode } from "react";
 import {
   fetchProducts, fetchMerchants, fetchPurchases, fetchNotifications, fetchWalletBalance, fetchCart,
-  addCartItem, removeCartItem,
-  type ApiProduct, type ApiMerchant, type ApiPurchase, type ApiNotification, type ApiCartItem,
+  addCartItem, removeCartItem, fetchCryptoWallets,
+  type ApiProduct, type ApiMerchant, type ApiPurchase, type ApiNotification, type ApiCartItem, type CryptoWallet,
 } from "./api";
 
 // A single client for the whole client-rendered SPA. Created lazily so it exists
@@ -87,6 +87,7 @@ export const qk = {
   purchases: (role: "buyer" | "seller") => ["purchases", role] as const,
   notifications: ["notifications"] as const,
   wallet: ["wallet", "balance"] as const,
+  cryptoWallets: ["wallet", "crypto-wallets"] as const,
   cart: ["cart"] as const,
 };
 
@@ -114,6 +115,14 @@ export const useWalletBalanceQuery = () =>
 
 export const useCartQuery = () =>
   useQuery<ApiCartItem[]>({ queryKey: qk.cart, queryFn: async () => need(await fetchCart(), "cart"), staleTime: 10_000 });
+
+export const useCryptoWalletsQuery = (enabled = true) =>
+  useQuery<{ wallets: CryptoWallet[]; configured: boolean }>({
+    queryKey: qk.cryptoWallets,
+    queryFn: async () => need(await fetchCryptoWallets(), "crypto wallets"),
+    staleTime: 30_000,
+    enabled,
+  });
 
 // Invalidate related caches after a mutation so every screen reflects the change
 // in real time (e.g. after a purchase: refresh cart, purchases, wallet).

@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Alert01Icon, ArrowDown01Icon, BankIcon, Cancel01Icon, Copy01Icon, Download01Icon, Upload01Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
+import QRCodeSVG from "react-qr-code";
+import { ArrowDown01Icon, BankIcon, Cancel01Icon, Copy01Icon, Download01Icon, Upload01Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
 import { DesktopTopNav, FONT, AppMobileHeader, P, MBG, useProfile, useScrollLock, Skeleton, useLoadGate } from "../shared";
-import { fetchWalletTransactions, startDeposit, readCache, writeCache, type ApiWalletTx } from "../lib/api";
-import { useWalletBalanceQuery, useInvalidate, qk } from "../lib/query";
+import { fetchWalletTransactions, startDeposit, createCryptoWallet, readCache, writeCache, type ApiWalletTx, type CryptoWallet } from "../lib/api";
+import { useWalletBalanceQuery, useCryptoWalletsQuery, useInvalidate, qk } from "../lib/query";
+import { CRYPTO_ASSETS } from "@/server/schemas";
 import { toast } from "../toast";
 import type { Page } from "../shared";
 
@@ -119,19 +121,115 @@ function TransactionRow({ tx }: { tx: WTx }) {
   </div>;
 }
 
-function QRCode() {
-  const size = 29;
-  const finder = (x: number, y: number) => <g key={`${x}-${y}`}><rect x={x} y={y} width="7" height="7" fill="#fff"/><rect x={x + 1} y={y + 1} width="5" height="5" fill="#000"/><rect x={x + 2} y={y + 2} width="3" height="3" fill="#fff"/></g>;
-  const cells: React.ReactNode[] = [];
-  for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
-    const inFinder = (x < 8 && y < 8) || (x > 20 && y < 8) || (x < 8 && y > 20);
-    if (!inFinder && ((x * 13 + y * 7 + x * y * 3) % 11 < 5 || (x + y) % 9 === 0)) cells.push(<rect key={`${x}:${y}`} x={x} y={y} width="1" height="1" fill="#fff"/>);
-  }
-  return <svg viewBox="0 0 29 29" className="h-36 w-36 bg-black p-1" shapeRendering="crispEdges"><rect width="29" height="29" fill="#000"/>{cells}{finder(0, 0)}{finder(22, 0)}{finder(0, 22)}</svg>;
+/* Small filled-orange info dot with a white "i" — the note marker in the crypto
+   panels (matches the reference). */
+function InfoDot({ size = 24 }: { size?: number }) {
+  return <span className="flex shrink-0 items-center justify-center rounded-full font-bold text-white" style={{ width: size, height: size, background: P, fontSize: size * 0.62, lineHeight: 1 }}>i</span>;
 }
 
-function CoinChip({ symbol, color, active, onClick }: { symbol: string; color: string; active?: boolean; onClick?: () => void }) {
-  return <button onClick={onClick} className={`flex h-[60px] items-center gap-2 rounded-2xl border px-3 text-left transition ${active ? "border-[#f04e23] bg-[#391813]" : "border-[#1e2b3f] bg-black hover:border-[#34465f]"}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[15px] font-extrabold text-white" style={{ background: color }}>{symbol === "USDT" ? "₮" : symbol === "USDC" ? "$" : symbol === "BTC" ? "₿" : symbol === "ETH" ? "♦" : symbol === "LTC" ? "Ł" : symbol === "BNB" ? "◆" : "▾"}</span><span className="text-[13px] font-bold text-white">{symbol}</span></button>;
+/* Round coin badge (glyph on the asset's brand color). */
+function CoinBadge({ asset, size = 28 }: { asset: { color: string; symbol: string }; size?: number }) {
+  return <span className="flex shrink-0 items-center justify-center rounded-full font-black text-white" style={{ width: size, height: size, background: asset.color, fontSize: size * 0.5 }}>{asset.symbol}</span>;
+}
+
+/* Reusable "Before you deposit" safety note. */
+function DepositWarning({ currency }: { currency: string }) {
+  return <div className="mt-4 rounded-2xl border px-4 py-4" style={{ background: "rgba(240,78,35,0.08)", borderColor: "rgba(240,78,35,0.45)" }}>
+    <div className="flex gap-3"><InfoDot size={24}/><div><h4 className="text-[13.5px] font-bold">Before you deposit</h4>
+      <ul className="mt-2 list-disc space-y-1.5 pl-4 text-[12px] leading-[1.5]" style={{ color: "var(--sb-chip-text)" }}>
+        <li>Deposits below ~8 USD may not be processed.</li>
+        <li>Send only <b style={{ color: "#e7d4ce" }}>{currency}</b> to this address.</li>
+        <li>Make sure you use the correct network. Incorrect network may lead to loss of funds.</li>
+      </ul></div></div>
+  </div>;
+}
+
+/* Crypto deposit tab: generate per-asset static wallets (Heleket), then show a
+   QR + address to deposit to. States: loading → empty → currency picker →
+   wallet list with the selected asset's address. */
+function CryptoDeposit({ active }: { active: boolean }) {
+  const invalidate = useInvalidate();
+  const { data, isLoading } = useCryptoWalletsQuery(active);
+  const wallets = useMemo<CryptoWallet[]>(() => data?.wallets ?? [], [data]);
+  const [mode, setMode] = useState<"list" | "picker">("list");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pickAsset, setPickAsset] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => { if (wallets.length && !wallets.some((w) => w.asset === selectedId)) setSelectedId(wallets[0].asset); }, [wallets, selectedId]);
+
+  const shown = wallets.find((w) => w.asset === selectedId) ?? wallets[0];
+  const createdIds = new Set(wallets.map((w) => w.asset));
+  const available = CRYPTO_ASSETS.filter((a) => !createdIds.has(a.id));
+  const pickMeta = CRYPTO_ASSETS.find((a) => a.id === pickAsset);
+
+  const create = async () => {
+    if (!pickAsset || creating) return;
+    setCreating(true);
+    const r = await createCryptoWallet(pickAsset);
+    setCreating(false);
+    if (!r.ok || !r.wallet) { toast.error(r.error ?? "Could not create the wallet.", { title: "Crypto wallet" }); return; }
+    await invalidate([qk.cryptoWallets]);
+    toast.success("Static wallet created successfully", { title: "Crypto" });
+    setSelectedId(r.wallet.asset); setPickAsset(null); setMode("list");
+  };
+
+  const copyAddress = async () => {
+    if (!shown) return;
+    if (await copyText(shown.address)) toast.success("Address copied", { title: "Copied" });
+    else toast.error("Couldn't copy — try again.", { title: "Copy" });
+  };
+
+  if (isLoading) return <div className="mt-5 space-y-3"><Skeleton className="h-4 w-40"/><div className="flex gap-2.5">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-[50px] w-28" rounded="rounded-2xl"/>)}</div><Skeleton className="mt-2 h-44 w-full" rounded="rounded-2xl"/><Skeleton className="h-[52px] w-full" rounded="rounded-2xl"/></div>;
+
+  // ── Currency picker (create a wallet) ──
+  if (mode === "picker") {
+    return <>
+      <div className="mt-5 flex items-center justify-between">
+        <h3 className="text-[16px] font-bold">{wallets.length ? "Add a static wallet" : "Create your first static wallet"}</h3>
+        {wallets.length > 0 && <button onClick={() => { setMode("list"); setPickAsset(null); }} className="text-[12.5px] font-semibold" style={{ color: "var(--sb-chip-text)" }}>Back</button>}
+      </div>
+      <div className="mt-3 flex gap-3 rounded-2xl border px-4 py-3.5" style={{ background: "rgba(240,78,35,0.08)", borderColor: "rgba(240,78,35,0.45)" }}>
+        <InfoDot size={24}/><div><h4 className="text-[13.5px] font-bold">Choose a currency</h4><p className="mt-1 text-[12.5px] leading-[1.5]" style={{ color: "var(--sb-chip-text)" }}>Select a cryptocurrency below, then tap <b style={{ color: "#e7d4ce" }}>Create Wallet</b> to add it to your list.</p></div>
+      </div>
+      {available.length === 0 ? <p className="mt-5 text-center text-[13px]" style={{ color: "var(--sb-chip-text)" }}>You&apos;ve created every available wallet.</p> :
+        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">{available.map((a) => <button key={a.id} onClick={() => setPickAsset(a.id)} className="flex h-[52px] items-center gap-2 rounded-2xl border px-2.5 text-left transition" style={pickAsset === a.id ? { borderColor: P, background: "rgba(240,78,35,0.10)" } : { background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}><CoinBadge asset={a}/><b className="truncate text-[12.5px]">{a.label}</b></button>)}</div>}
+      <button onClick={create} disabled={!pickAsset || creating} className="mt-5 inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-full text-[15px] font-bold transition hover:opacity-90 active:scale-[.99] disabled:cursor-not-allowed disabled:opacity-55" style={{ background: P, color: "#fff" }}>
+        {creating && <svg className="animate-spin" width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fff" strokeOpacity=".3" strokeWidth="2.6"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#fff" strokeWidth="2.6" strokeLinecap="round"/></svg>}
+        {creating ? "Creating wallet…" : pickMeta ? `Create ${pickMeta.label} Wallet` : "Select a currency first"}
+      </button>
+    </>;
+  }
+
+  // ── Empty state ──
+  if (wallets.length === 0) {
+    return <>
+      <h3 className="mt-5 text-[15px] font-bold">My static wallets</h3>
+      <div className="mt-3 rounded-2xl border p-5" style={{ background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}>
+        <h4 className="text-[17px] font-bold">No static wallets yet</h4>
+        <p className="mt-2 text-[13px] leading-[1.55]" style={{ color: "var(--sb-chip-text)" }}>Create a static wallet to start receiving crypto payments. Each coin gets its own unique deposit address that credits your balance automatically.</p>
+        <button onClick={() => { setPickAsset(null); setMode("picker"); }} className="mt-4 h-[52px] w-full rounded-full text-[15px] font-bold transition hover:opacity-90 active:scale-[.99]" style={{ background: P, color: "#fff" }}>Create Wallet</button>
+      </div>
+    </>;
+  }
+
+  // ── Wallet list + selected address ──
+  const meta = CRYPTO_ASSETS.find((a) => a.id === shown?.asset);
+  return <>
+    <h3 className="mt-5 text-[15px] font-bold">My static wallets</h3>
+    <div className="mt-3 flex flex-wrap gap-2.5">{wallets.map((w) => { const m = CRYPTO_ASSETS.find((a) => a.id === w.asset)!; return <button key={w.id} onClick={() => setSelectedId(w.asset)} className="flex h-[50px] items-center gap-2 rounded-2xl border px-3 transition" style={shown?.asset === w.asset ? { borderColor: P, background: "rgba(240,78,35,0.10)" } : { background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}><CoinBadge asset={m} size={26}/><b className="text-[13.5px]">{m.label}</b></button>; })}</div>
+    {shown && <>
+      <div className="mt-4 rounded-2xl p-5" style={{ background: "#0b0c0f", border: "1px solid var(--sb-bd)" }}>
+        <div className="mx-auto w-fit rounded-xl bg-white p-3"><QRCodeSVG value={shown.address} size={158} bgColor="#ffffff" fgColor="#0b0c0f"/></div>
+      </div>
+      <div className="mt-4 flex min-w-0 items-center gap-2 rounded-2xl px-4 py-3" style={{ background: "var(--sb-chip)" }}>
+        <span className="min-w-0 flex-1 truncate text-[13px]">{shown.address}</span>
+        <button onClick={copyAddress} aria-label="Copy address" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition hover:opacity-90 active:scale-95" style={{ background: P }}><Copy01Icon size={18} color="#fff"/></button>
+      </div>
+      <DepositWarning currency={meta?.currency ?? shown.currency}/>
+    </>}
+    <button onClick={() => { setPickAsset(null); setMode("picker"); }} className="mt-5 h-[52px] w-full rounded-2xl border border-dashed text-[14px] font-bold transition hover:opacity-90" style={{ borderColor: "rgba(240,78,35,0.6)", color: P }}>+ Add new wallet</button>
+  </>;
 }
 
 export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
@@ -185,7 +283,6 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
   useScrollLock(withdrawing || funding || Boolean(comingSoon));
   const [fundTab, setFundTab] = useState<"local" | "crypto">("local");
   const [currency, setCurrency] = useState("NGN");
-  const [coin, setCoin] = useState("USDT");
   const [amount, setAmount] = useState("");
   const [notice, setNotice] = useState(false);
   const [depositing, setDepositing] = useState(false);
@@ -264,7 +361,7 @@ export function WalletPage({ setPage }: { setPage: (page: Page) => void }) {
         </div>
       </div>
     )}
-    {funding && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-2.5 py-4 backdrop-blur-[2px] sm:p-6"><div className="max-h-[94vh] w-full max-w-[600px] overflow-y-auto rounded-[24px] p-5 shadow-[0_28px_90px_rgba(0,0,0,.55)] sm:p-7" style={{ background: "var(--sb-card)", border: "1px solid var(--sb-bd)" }}><div className="flex items-start justify-between"><div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-xl" style={{ background: "rgba(240,78,35,0.12)", color: P }}><WalletMoneyIcon size={24}/></span><div><h2 className="text-[20px] font-bold tracking-[-.03em]">Add Funds</h2><p className="mt-0.5 text-[13px]" style={{ color: "var(--sb-chip-text)" }}>Fund your wallet securely</p></div></div><button onClick={() => setFunding(false)} className="rounded-full p-1.5 transition duration-200 hover:rotate-90" style={{ color: "var(--sb-chip-text)" }}><Cancel01Icon size={22}/></button></div><div className="mt-5 grid grid-cols-2 rounded-[16px] p-1.5" style={{ background: "var(--sb-chip)" }}><button onClick={() => setFundTab("local")} className={`flex h-11 items-center justify-center gap-2 rounded-[12px] text-[14px] font-bold transition ${fundTab === "local" ? "text-white shadow-[0_2px_8px_rgba(0,0,0,.35)]" : ""}`} style={fundTab === "local" ? { background: "var(--sb-card)" } : { color: "var(--sb-chip-text)" }}><BankIcon size={20}/>Local</button><button onClick={() => setFundTab("crypto")} className={`flex h-11 items-center justify-center gap-2 rounded-[12px] text-[14px] font-bold transition ${fundTab === "crypto" ? "text-white shadow-[0_2px_8px_rgba(0,0,0,.35)]" : ""}`} style={fundTab === "crypto" ? { background: "var(--sb-card)" } : { color: "var(--sb-chip-text)" }}><span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-[13px] font-black text-black">₿</span>Crypto</button></div>{!fundReady ? <div className="mt-5 space-y-3"><Skeleton className="h-4 w-32"/><div className="grid grid-cols-3 gap-2.5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[54px]" rounded="rounded-2xl"/>)}</div><Skeleton className="mt-3 h-4 w-20"/><Skeleton className="mx-auto h-11 w-44"/><Skeleton className="mt-3 h-[70px] w-full" rounded="rounded-2xl"/><Skeleton className="h-[52px] w-full" rounded="rounded-full"/></div> : fundTab === "local" ? <><div className="mt-5 flex items-center justify-between"><h3 className="text-[15px] font-bold">Select currency</h3><span className="text-[12.5px]" style={{ color: "var(--sb-chip-text)" }}>One currency per deposit</span></div><div className="mt-3 grid grid-cols-3 gap-2.5">{[["🇳🇬", "NGN"],["🇬🇭", "GHS"],["🇰🇪", "KES"],["🇿🇦", "ZAR"],["🇨🇮", "XOF"]].map(([flag, code]) => <button key={code} onClick={() => setCurrency(code)} className={`flex h-[54px] items-center justify-center gap-2 rounded-2xl border transition ${currency === code ? "border-[#f04e23]" : ""}`} style={currency === code ? { background: "rgba(240,78,35,0.10)" } : { background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}><span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full text-[15px] leading-none">{flag}</span><b className="text-[14.5px]">{code}</b></button>)}</div><h3 className="mt-6 text-[15px] font-bold">Amount</h3><div className="mt-3 flex flex-col items-center gap-1 py-1"><div className="flex items-center gap-3"><span className="text-[26px] font-medium" style={{ color: "var(--sb-chip-text)" }}>$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0" onFocus={(event) => event.currentTarget.select()} className="w-40 bg-transparent text-center text-[32px] font-bold tracking-[-.03em] outline-none placeholder:text-[#8b97a6]"/></div><span className="text-[13px] font-semibold" style={{ color: "var(--sb-chip-text)" }}>{rateLabel}</span></div><div className="mt-3 border-t" style={{ borderColor: "var(--sb-bd)" }}/><div className="mt-5 flex items-start gap-3 rounded-2xl border px-4 py-3.5" style={{ background: "rgba(240,78,35,0.08)", borderColor: "rgba(240,78,35,0.45)" }}><span className="mt-0.5 shrink-0"><SecureShield size={22}/></span><div><h4 className="text-[14px] font-bold">Secured and Trusted</h4><p className="mt-1 text-[12.5px] leading-[1.5]" style={{ color: "var(--sb-chip-text)" }}>Your funds are protected with a bank level security and processed through a licensed payment partner</p></div></div><button onClick={beginDeposit} disabled={depositing} className="mt-5 inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-full text-[15px] font-bold transition hover:opacity-90 active:scale-[.99] disabled:opacity-60" style={{ background: P, color: "#fff" }}>{depositing && <svg className="animate-spin" width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fff" strokeOpacity=".3" strokeWidth="2.6"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#fff" strokeWidth="2.6" strokeLinecap="round"/></svg>}{depositing ? "Starting payment…" : "Continue to payment"}</button><p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="2"/></svg>You will be redirected to a secure service provider</p></> : <><h3 className="mt-5 text-[15px] font-bold">My static wallets</h3><div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">{[["USDT", "#e62929"],["USDC", "#2775ca"],["BTC", "#f7931a"],["ETH", "#627eea"],["LTC", "#345dbe"],["BNB", "#f3ba2f"],["TRX", "#ef0027"]].map(([symbol, color]) => <CoinChip key={symbol} symbol={symbol} color={color} active={coin === symbol} onClick={() => setCoin(symbol)}/>)}</div><div className="mt-5 rounded-2xl border p-4" style={{ background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}><label className="block text-[13px] font-bold">Select Network<select className="mt-2 h-10 w-full rounded-md border px-3 text-[13px] outline-none" style={{ background: "var(--sb-card)", borderColor: "var(--sb-bd)" }}><option>TRC 20</option><option>ERC 20</option></select></label><div className="my-5 flex justify-center"><QRCode /></div><div className="flex min-w-0 items-center gap-2 rounded-xl px-3 py-3" style={{ background: "var(--sb-card)" }}><span className="min-w-0 flex-1 truncate text-[12px]">TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM</span><button onClick={() => copyText("TBC1KZwjJ6dkhfZdgagnxfiAq2aPaevyUM")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ background: P }}><Copy01Icon size={17} color="#fff"/></button></div><div className="mt-4 rounded-xl border px-4 py-4" style={{ background: "rgba(240,78,35,0.08)", borderColor: "rgba(240,78,35,0.45)" }}><div className="flex gap-3"><Alert01Icon size={22} className="shrink-0 text-[#ff5a37]"/><div><h4 className="text-[12px] font-bold">Before you deposit</h4><ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-4"><li>Deposits below ~8 USD may not be processed.</li><li>Send only {coin} to this address.</li><li>Make sure you use the correct network. Incorrect network may lead to loss of funds.</li></ul></div></div></div></div></>}</div></div>}
+    {funding && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-2.5 py-4 backdrop-blur-[2px] sm:p-6"><div className="max-h-[94vh] w-full max-w-[600px] overflow-y-auto rounded-[24px] p-5 shadow-[0_28px_90px_rgba(0,0,0,.55)] sm:p-7" style={{ background: "var(--sb-card)", border: "1px solid var(--sb-bd)" }}><div className="flex items-start justify-between"><div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-xl" style={{ background: "rgba(240,78,35,0.12)", color: P }}><WalletMoneyIcon size={24}/></span><div><h2 className="text-[20px] font-bold tracking-[-.03em]">Add Funds</h2><p className="mt-0.5 text-[13px]" style={{ color: "var(--sb-chip-text)" }}>Fund your wallet securely</p></div></div><button onClick={() => setFunding(false)} className="rounded-full p-1.5 transition duration-200 hover:rotate-90" style={{ color: "var(--sb-chip-text)" }}><Cancel01Icon size={22}/></button></div><div className="mt-5 grid grid-cols-2 rounded-[16px] p-1.5" style={{ background: "var(--sb-chip)" }}><button onClick={() => setFundTab("local")} className={`flex h-11 items-center justify-center gap-2 rounded-[12px] text-[14px] font-bold transition ${fundTab === "local" ? "text-white shadow-[0_2px_8px_rgba(0,0,0,.35)]" : ""}`} style={fundTab === "local" ? { background: "var(--sb-card)" } : { color: "var(--sb-chip-text)" }}><BankIcon size={20}/>Local</button><button onClick={() => setFundTab("crypto")} className={`flex h-11 items-center justify-center gap-2 rounded-[12px] text-[14px] font-bold transition ${fundTab === "crypto" ? "text-white shadow-[0_2px_8px_rgba(0,0,0,.35)]" : ""}`} style={fundTab === "crypto" ? { background: "var(--sb-card)" } : { color: "var(--sb-chip-text)" }}><span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-[13px] font-black text-black">₿</span>Crypto</button></div>{!fundReady ? <div className="mt-5 space-y-3"><Skeleton className="h-4 w-32"/><div className="grid grid-cols-3 gap-2.5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[54px]" rounded="rounded-2xl"/>)}</div><Skeleton className="mt-3 h-4 w-20"/><Skeleton className="mx-auto h-11 w-44"/><Skeleton className="mt-3 h-[70px] w-full" rounded="rounded-2xl"/><Skeleton className="h-[52px] w-full" rounded="rounded-full"/></div> : fundTab === "local" ? <><div className="mt-5 flex items-center justify-between"><h3 className="text-[15px] font-bold">Select currency</h3><span className="text-[12.5px]" style={{ color: "var(--sb-chip-text)" }}>One currency per deposit</span></div><div className="mt-3 grid grid-cols-3 gap-2.5">{[["🇳🇬", "NGN"],["🇬🇭", "GHS"],["🇰🇪", "KES"],["🇿🇦", "ZAR"],["🇨🇮", "XOF"]].map(([flag, code]) => <button key={code} onClick={() => setCurrency(code)} className={`flex h-[54px] items-center justify-center gap-2 rounded-2xl border transition ${currency === code ? "border-[#f04e23]" : ""}`} style={currency === code ? { background: "rgba(240,78,35,0.10)" } : { background: "var(--sb-chip)", borderColor: "var(--sb-bd)" }}><span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full text-[15px] leading-none">{flag}</span><b className="text-[14.5px]">{code}</b></button>)}</div><h3 className="mt-6 text-[15px] font-bold">Amount</h3><div className="mt-3 flex flex-col items-center gap-1 py-1"><div className="flex items-center gap-3"><span className="text-[26px] font-medium" style={{ color: "var(--sb-chip-text)" }}>$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0" onFocus={(event) => event.currentTarget.select()} className="w-40 bg-transparent text-center text-[32px] font-bold tracking-[-.03em] outline-none placeholder:text-[#8b97a6]"/></div><span className="text-[13px] font-semibold" style={{ color: "var(--sb-chip-text)" }}>{rateLabel}</span></div><div className="mt-3 border-t" style={{ borderColor: "var(--sb-bd)" }}/><div className="mt-5 flex items-start gap-3 rounded-2xl border px-4 py-3.5" style={{ background: "rgba(240,78,35,0.08)", borderColor: "rgba(240,78,35,0.45)" }}><span className="mt-0.5 shrink-0"><SecureShield size={22}/></span><div><h4 className="text-[14px] font-bold">Secured and Trusted</h4><p className="mt-1 text-[12.5px] leading-[1.5]" style={{ color: "var(--sb-chip-text)" }}>Your funds are protected with a bank level security and processed through a licensed payment partner</p></div></div><button onClick={beginDeposit} disabled={depositing} className="mt-5 inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-full text-[15px] font-bold transition hover:opacity-90 active:scale-[.99] disabled:opacity-60" style={{ background: P, color: "#fff" }}>{depositing && <svg className="animate-spin" width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fff" strokeOpacity=".3" strokeWidth="2.6"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#fff" strokeWidth="2.6" strokeLinecap="round"/></svg>}{depositing ? "Starting payment…" : "Continue to payment"}</button><p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[11.5px]" style={{ color: "var(--sb-chip-text)" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="2"/></svg>You will be redirected to a secure service provider</p></> : <CryptoDeposit active={fundTab === "crypto"}/>}</div></div>}
     {notice && <div role="status" className="fixed bottom-24 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-[#1d2939] px-5 py-3 text-[13px] font-semibold shadow-2xl">Our support team has been notified.<button onClick={() => setNotice(false)} className="ml-3 text-[#f04e23]">Close</button></div>}
     {comingSoon && (
       <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]" onClick={() => setComingSoon("")}>

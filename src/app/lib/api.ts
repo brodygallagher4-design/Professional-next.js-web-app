@@ -285,6 +285,21 @@ export const startDeposit = async (amount: number, currency: string): Promise<De
     return { ok: true, checkout_url: data.checkout_url };
   } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
 };
+// ─── Heleket crypto static wallets ───────────────────────────────────────────
+export interface CryptoWallet { id: number; asset: string; currency: string; network: string; label: string; address: string; created_at: string; }
+export const fetchCryptoWallets = () => get<{ wallets: CryptoWallet[]; configured: boolean }>("/api/wallet/crypto-wallets");
+export interface CreateWalletResult { ok: boolean; wallet?: CryptoWallet; error?: string }
+export const createCryptoWallet = async (asset: string): Promise<CreateWalletResult> => {
+  try {
+    const res = await fetch("/api/wallet/crypto-wallets", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string; wallet?: CryptoWallet };
+    if (!res.ok || !data.wallet) return { ok: false, error: data.error ?? "Could not create the wallet." };
+    return { ok: true, wallet: data.wallet };
+  } catch { return { ok: false, error: "Could not reach the server — check your connection." }; }
+};
+
 // A buyer leaves a review on one of their orders (seller resolved server-side).
 export interface ReviewResult { ok: boolean; error?: string }
 export const submitReview = async (r: { order_id: string; sentiment: string; feedback: string }): Promise<ReviewResult> => {
