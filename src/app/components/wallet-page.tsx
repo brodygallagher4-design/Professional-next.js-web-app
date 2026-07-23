@@ -127,8 +127,20 @@ function InfoDot({ size = 24 }: { size?: number }) {
   return <span className="flex shrink-0 items-center justify-center rounded-full font-bold text-white" style={{ width: size, height: size, background: P, fontSize: size * 0.62, lineHeight: 1 }}>i</span>;
 }
 
-/* Round coin badge (glyph on the asset's brand color). */
-function CoinBadge({ asset, size = 28 }: { asset: { color: string; symbol: string }; size?: number }) {
+/* Real brand logos for each coin (inline SVG — CSP-safe, no external requests).
+   Keyed on the base currency; USDT/USDC variants share their token logo. */
+const COIN_LOGOS: Record<string, React.ReactNode> = {
+  BTC: <><circle cx="16" cy="16" r="16" fill="#f7931a"/><path fill="#fff" d="M23.19 14.02c.31-2.1-1.28-3.22-3.47-3.98l.71-2.84-1.73-.43-.69 2.77c-.45-.12-.92-.22-1.38-.33l.69-2.78L15.6 6l-.71 2.84c-.38-.09-.75-.17-1.1-.26v-.01l-2.39-.6-.46 1.85s1.28.3 1.26.31c.7.18.83.64.8 1l-.8 3.24c.05.01.11.03.18.06l-.19-.05-1.13 4.53c-.09.21-.3.53-.79.41.02.03-1.26-.31-1.26-.31l-.86 1.98 2.25.56c.42.1.83.22 1.23.32l-.71 2.87 1.72.43.71-2.84c.47.13.93.25 1.38.36l-.71 2.83 1.73.43.72-2.87c2.95.56 5.16.33 6.09-2.33.75-2.15-.04-3.39-1.59-4.19 1.13-.26 1.98-1 2.21-2.54zm-3.95 5.54c-.53 2.15-4.15.99-5.32.7l.95-3.81c1.17.29 4.93.87 4.37 3.11zm.54-5.57c-.49 1.95-3.5.96-4.47.72l.86-3.45c.98.24 4.12.7 3.61 2.73z"/></>,
+  ETH: <><circle cx="16" cy="16" r="16" fill="#627eea"/><g fill="#fff"><path fillOpacity=".6" d="M16.5 4v8.87l7.5 3.35z"/><path d="M16.5 4 9 16.22l7.5-3.35z"/><path fillOpacity=".6" d="M16.5 21.97V28L24 17.62z"/><path d="M16.5 28v-6.03L9 17.62z"/><path fillOpacity=".2" d="m16.5 20.57 7.5-4.35-7.5-3.35z"/><path fillOpacity=".6" d="m9 16.22 7.5 4.35v-7.7z"/></g></>,
+  LTC: <><circle cx="16" cy="16" r="16" fill="#345d9d"/><path fill="#fff" d="M10.43 19.21 9 19.77l.63-2.44 1.44-.55L13.45 8h3.98l-1.87 7.62 1.41-.55-.59 2.34-1.42.55-.8 3.3h7.58l-.7 2.74H9.57z"/></>,
+  USDT: <><circle cx="16" cy="16" r="16" fill="#26a17b"/><path fill="#fff" d="M17.92 17.38c-.11.01-.68.04-1.94.04-1.01 0-1.72-.03-1.97-.04-3.89-.17-6.79-.85-6.79-1.66s2.9-1.48 6.79-1.66v2.65c.25.01.98.06 1.99.06 1.2 0 1.81-.05 1.92-.06v-2.64c3.88.17 6.78.85 6.78 1.65s-2.9 1.49-6.78 1.66m0-3.59v-2.37h5.42V7.82H8.6v3.61h5.41v2.36c-4.4.2-7.71 1.07-7.71 2.12s3.31 1.91 7.71 2.12v7.58h3.91v-7.58c4.39-.2 7.69-1.07 7.69-2.12s-3.3-1.91-7.69-2.12"/></>,
+  BNB: <><circle cx="16" cy="16" r="16" fill="#f3ba2f"/><path fill="#fff" d="M12.12 14.4 16 10.52l3.89 3.89 2.26-2.26L16 6l-6.14 6.14zM6 16l2.26-2.26L10.52 16l-2.26 2.26zm6.12 1.6L16 21.48l3.89-3.89 2.26 2.26L16 26l-6.14-6.14zM21.48 16l2.26-2.26L26 16l-2.26 2.26zm-3.19 0L16 18.29l-1.7-1.69-.19-.2-.4-.4L16 13.71l2.29 2.29z"/></>,
+  TRX: <><circle cx="16" cy="16" r="16" fill="#ef0027"/><path fill="#fff" d="M21.93 9.91 7.5 7.26l7.6 19.11 10-12.17zm-.23 1.09 1.87 2.52-5.1.92zm-5.08 3.2-5.53-4.59 8.99 1.66zm-.31.72-.87 7.16-4.9-12.31zm.81.18 5.58-1.01-6.38 7.76z"/></>,
+  USDC: <><circle cx="16" cy="16" r="16" fill="#2775ca"/><path fill="#fff" d="M20.5 18.5c0-2.4-1.5-3.2-4.4-3.6-2.1-.3-2.5-.8-2.5-1.8s.7-1.6 2.1-1.6c1.3 0 2 .4 2.3 1.5.1.2.3.4.5.4h1.1c.3 0 .5-.2.5-.5v-.1c-.3-1.4-1.4-2.5-2.9-2.6V9c0-.3-.2-.5-.6-.6h-1c-.3 0-.5.2-.6.6v1.1c-2.1.3-3.4 1.7-3.4 3.5 0 2.3 1.4 3.1 4.3 3.5 2 .4 2.6.8 2.6 1.9s-1 1.9-2.3 1.9c-1.8 0-2.4-.8-2.6-1.8-.1-.3-.3-.4-.5-.4h-1.2c-.3 0-.5.2-.5.5v.1c.3 1.6 1.3 2.7 3.6 3v1.1c0 .3.2.5.6.6h1c.3 0 .5-.2.6-.6v-1.1c2.1-.4 3.5-1.8 3.5-3.7"/><path fill="#fff" d="M13 24.6c-3.5-1.3-5.3-5.2-4-8.7.7-1.9 2.1-3.3 4-4 .2-.1.3-.3.3-.6v-1c0-.2-.1-.4-.3-.5h-.4c-4.3 1.4-6.7 6-5.3 10.3.8 2.5 2.8 4.5 5.3 5.3.2.1.5 0 .5-.3v-.1c0-.3-.1-.4-.1-.6zm6.4-14.7c-.2.1-.5 0-.5.3v.1c0 .3.1.4.1.6 3.5 1.3 5.3 5.2 4 8.7-.7 1.9-2.1 3.3-4 4-.2.1-.3.3-.3.6v1c0 .2.1.4.3.5h.4c4.3-1.4 6.7-6 5.3-10.3-.8-2.5-2.8-4.5-5.3-5.3"/></>,
+};
+function CoinBadge({ asset, size = 28 }: { asset: { currency: string; color: string; symbol: string }; size?: number }) {
+  const logo = COIN_LOGOS[asset.currency];
+  if (logo) return <svg width={size} height={size} viewBox="0 0 32 32" className="shrink-0" role="img" aria-label={asset.currency}>{logo}</svg>;
   return <span className="flex shrink-0 items-center justify-center rounded-full font-black text-white" style={{ width: size, height: size, background: asset.color, fontSize: size * 0.5 }}>{asset.symbol}</span>;
 }
 
